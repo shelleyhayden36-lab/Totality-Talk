@@ -198,13 +198,12 @@ export default function JudgePortal({ state, onStateUpdate, formatTime }: JudgeP
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (activeJudge && draftBallots.length > 0) {
-        navigator.sendBeacon(
-          '/api/judges/logout',
-          JSON.stringify({
-            judgeId: activeJudge.id,
-            ballots: draftBallots
-          })
-        );
+        const payload = JSON.stringify({
+          judgeId: activeJudge.id,
+          ballots: draftBallots
+        });
+        const blob = new Blob([payload], { type: 'application/json' });
+        navigator.sendBeacon('/api/judges/logout', blob);
       }
     };
 

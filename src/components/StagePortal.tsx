@@ -6,10 +6,11 @@ import CrossExamLayout from './stage/CrossExamLayout';
 import RebuttalLayout from './stage/RebuttalLayout';
 import ChatQLayout from './stage/ChatQLayout';
 import ClosingLayout from './stage/ClosingLayout';
+import FloorLayout from './stage/FloorLayout';
 import HighlightsLayout from './stage/HighlightsLayout';
 import WinnerLayout from './stage/WinnerLayout';
 import CreditsLayout from './stage/CreditsLayout';
-import { X, Volume2, VolumeX, Megaphone } from 'lucide-react';
+import { X, Volume2, VolumeX, Megaphone, Pin, PinOff, ChevronUp, ChevronDown, Move } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface StagePortalProps {
@@ -57,8 +58,9 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
   const bgMusicRef = useRef<HTMLAudioElement | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
-  // Popular vote widget alternating view state: 'gauge' (gauge/tug of war) vs 'scroll' (scrolling rules)
+  // Popular vote widget alternating view state & top bar docking state
   const [widgetView, setWidgetView] = useState<'gauge' | 'scroll'>('gauge');
+  const [isPopularVoteDocked, setIsPopularVoteDocked] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -397,48 +399,50 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
   // Layout loading system: registry mapping phase IDs to their respective display layout components
   const renderActiveLayout = () => {
-    switch (currentPhaseId) {
-      case 'LOBBY':
-        return <LobbyLayout state={state} formatTime={formatTime} />;
-      case 'OPENING':
-        return <OpeningLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
-      case 'CROSS EXAM':
-      case 'CROSS_EXAM':
-        return <CrossExamLayout state={state} formatTime={formatTime} />;
-      case 'REBUTTAL':
-      case 'REBUTTAL_OPPOSITION':
-      case 'REBUTTAL_AFFIRMATIVE':
-        return <RebuttalLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
-      case 'CHAT Q':
-      case 'CHAT_Q':
-        return <ChatQLayout state={state} formatTime={formatTime} />;
-      case 'HIGHLIGHT':
-      case 'HIGHLIGHTS':
-        return <HighlightsLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
-      case 'CLOSING':
-        if (state.closingSubPhase === 'WINNER') {
-          return <WinnerLayout state={state} formatTime={formatTime} />;
-        }
-        if (state.closingSubPhase === 'CREDITS') {
-          return <CreditsLayout state={state} />;
-        }
-        return <ClosingLayout state={state} formatTime={formatTime} />;
-      case 'WINNER':
-        return <WinnerLayout state={state} formatTime={formatTime} />;
-      case 'CREDITS':
-        return <CreditsLayout state={state} />;
-      default:
-        // Fallback layout in case of un-registered or custom phases
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-center p-4 border border-dashed border-gray-700/20 rounded-xl bg-gray-500/5">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Default Layout</h2>
-            <p className="text-gray-500 mt-1 text-[10px]">Phase: {state.currentPhase || 'Unknown'}</p>
-            <div className="mt-2 text-[9px] font-mono bg-[#101114] border border-[#1d1e24] p-2 rounded text-left">
-              Timer Left: {formatTime(state.timer.timeLeft)}
-            </div>
-          </div>
-        );
+    const p = (currentPhaseId || '').toUpperCase();
+
+    if (p.includes('LOBBY') || p.includes('IDLE') || p.includes('SETUP')) {
+      return <LobbyLayout state={state} formatTime={formatTime} />;
     }
+    if (p.includes('OPENING')) {
+      return <OpeningLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
+    }
+    if (p.includes('CROSS') || p.includes('EXAM')) {
+      return <CrossExamLayout state={state} formatTime={formatTime} />;
+    }
+    if (p.includes('REBUT')) {
+      return <RebuttalLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
+    }
+    if (p.includes('CHAT') || p.includes('QUESTION') || p.includes('CHAT Q')) {
+      return <ChatQLayout state={state} formatTime={formatTime} />;
+    }
+    if (p.includes('HIGHLIGHT')) {
+      return <HighlightsLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
+    }
+    if (p.includes('CLOSING') || p.includes('STATEMENT')) {
+      if (state.closingSubPhase === 'WINNER') {
+        return <WinnerLayout state={state} formatTime={formatTime} />;
+      }
+      if (state.closingSubPhase === 'CREDITS') {
+        return <CreditsLayout state={state} />;
+      }
+      return <ClosingLayout state={state} formatTime={formatTime} />;
+    }
+    if (p.includes('FLOOR')) {
+      return <FloorLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
+    }
+    if (p.includes('WINNER')) {
+      return <WinnerLayout state={state} formatTime={formatTime} />;
+    }
+    if (p.includes('CREDIT')) {
+      return <CreditsLayout state={state} />;
+    }
+
+    // Default fallback to OpeningLayout (or LobbyLayout if Round 1) if phase is non-standard or custom
+    if (state?.currentRound === 'Round 1') {
+      return <LobbyLayout state={state} formatTime={formatTime} />;
+    }
+    return <OpeningLayout state={state} formatTime={formatTime} onStateUpdate={onStateUpdate} />;
   };
 
   return (
@@ -661,13 +665,103 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
           const leftRope = "━".repeat(knotIndex);
           const rightRope = "━".repeat(ropeLength - 1 - knotIndex);
 
+          if (isPopularVoteDocked) {
+            // DOCKED TOP BAR MODE (Spans neatly across top bar)
+            return (
+              <motion.div
+                drag="y"
+                dragConstraints={{ top: 0, bottom: 150 }}
+                dragElastic={0.1}
+                dragMomentum={false}
+                onDragEnd={(_, info) => {
+                  if (info.offset.y > 40 || info.point.y > 120) {
+                    setIsPopularVoteDocked(false);
+                  }
+                }}
+                initial={{ opacity: 0, y: -20, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className={`absolute top-2 left-4 right-4 z-30 max-w-4xl mx-auto bg-[#090a0f]/95 backdrop-blur-md border rounded-xl p-2 px-3 shadow-[0_8px_24px_rgba(0,0,0,0.8)] flex items-center justify-between gap-3 text-xs select-none cursor-grab active:cursor-grabbing ${
+                  activeTeam === 'PRO'
+                    ? 'border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]'
+                    : activeTeam === 'CON'
+                    ? 'border-rose-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                    : 'border-cyan-500/40 shadow-[0_0_12px_rgba(0,242,255,0.2)]'
+                }`}
+              >
+                {/* Drag handle indicator */}
+                <div className="flex items-center gap-1.5 text-gray-400 hover:text-white shrink-0 cursor-grab" title="Drag down to float">
+                  <Move className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                  <span className="text-[9px] font-mono font-bold text-cyan-400 uppercase hidden sm:inline">TOP DOCKED</span>
+                </div>
+
+                {/* PRO STATS */}
+                <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px] font-black">
+                  <span className="text-blue-400">PRO:</span>
+                  <span className="text-white bg-blue-500/20 px-1.5 py-0.5 rounded border border-blue-500/30">{proVotes}V</span>
+                  <span className="text-gray-400 text-[9px]">({proPercent}%)</span>
+                </div>
+
+                {/* CENTER GAUGE & TUG OF WAR ROPE */}
+                <div className="flex-1 max-w-md flex flex-col gap-1 mx-2">
+                  <div className="h-1.5 w-full bg-gray-950 rounded-full overflow-hidden flex border border-white/10 relative">
+                    <motion.div
+                      animate={{ width: `${proPercent}%` }}
+                      transition={{ type: 'spring', stiffness: 100, damping: 15 }}
+                      className={`h-full bg-gradient-to-r from-blue-600 to-blue-400 ${activeTeam === 'PRO' ? 'brightness-125' : ''}`}
+                    />
+                    <motion.div
+                      animate={{ width: `${conPercent}%` }}
+                      transition={{ type: 'spring', stiffness: 100, damping: 15 }}
+                      className={`h-full bg-gradient-to-l from-rose-600 to-rose-400 ${activeTeam === 'CON' ? 'brightness-125' : ''}`}
+                    />
+                    <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 bg-black" />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[8px] font-mono bg-black/50 px-2 py-0.5 rounded border border-white/10">
+                    <span className="text-blue-400">🔵 PRO</span>
+                    <span className="text-gray-400 font-mono text-[8px] tracking-tight text-center flex-1">
+                      {leftRope}📍{rightRope}
+                    </span>
+                    <span className="text-rose-400">CON 🔴</span>
+                  </div>
+                </div>
+
+                {/* CON STATS */}
+                <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px] font-black">
+                  <span className="text-gray-400 text-[9px]">({conPercent}%)</span>
+                  <span className="text-white bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/30">{conVotes}V</span>
+                  <span className="text-rose-400">CON:</span>
+                </div>
+
+                {/* UNDOCK / FLOAT BUTTON */}
+                <button
+                  type="button"
+                  onClick={() => setIsPopularVoteDocked(false)}
+                  className="p-1 bg-[#16171d] hover:bg-[#20222b] text-gray-300 hover:text-white border border-[#2d2f39] rounded-lg transition-all cursor-pointer shrink-0 flex items-center gap-1 text-[9px] font-mono font-bold"
+                  title="Undock / Float Widget"
+                >
+                  <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden md:inline">FLOAT</span>
+                </button>
+              </motion.div>
+            );
+          }
+
+          // FLOATING MODE
           return (
             <motion.div
               drag
-              dragConstraints={{ left: -50, right: 50, top: -240, bottom: 80 }}
+              dragConstraints={{ left: -100, right: 100, top: -280, bottom: 80 }}
               dragElastic={0.05}
               dragMomentum={false}
-              className={`absolute left-1/2 -translate-x-1/2 bottom-3 z-20 w-[215px] select-none cursor-grab active:cursor-grabbing bg-[#090a0f]/90 backdrop-blur-md border rounded-lg p-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.6)] flex flex-col gap-1 transition-all duration-300 ${
+              onDragEnd={(_, info) => {
+                if (info.offset.y < -120 || info.point.y < 100) {
+                  setIsPopularVoteDocked(true);
+                }
+              }}
+              className={`absolute left-1/2 -translate-x-1/2 bottom-3 z-20 w-[225px] select-none cursor-grab active:cursor-grabbing bg-[#090a0f]/90 backdrop-blur-md border rounded-lg p-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.6)] flex flex-col gap-1 transition-all duration-300 ${
                 activeTeam === 'PRO'
                   ? 'shadow-[0_0_8px_rgba(59,130,246,0.25)] border-blue-500/40'
                   : activeTeam === 'CON'
@@ -677,8 +771,18 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
               whileHover={{ scale: 1.01 }}
               whileDrag={{ scale: 1.03, cursor: 'grabbing' }}
             >
-              {/* Small drag visual handle */}
-              <div className="absolute top-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white/10 rounded-full" />
+              {/* Drag handle & Dock to Top button */}
+              <div className="flex items-center justify-between px-1 pt-0.5">
+                <div className="w-4 h-0.5 bg-white/20 rounded-full mx-auto" />
+                <button
+                  type="button"
+                  onClick={() => setIsPopularVoteDocked(true)}
+                  className="text-gray-400 hover:text-cyan-300 transition-colors p-0.5 cursor-pointer"
+                  title="Dock to Top Bar"
+                >
+                  <ChevronUp className="w-3 h-3" />
+                </button>
+              </div>
 
               <div className="pt-0.5">
                 <AnimatePresence mode="wait">

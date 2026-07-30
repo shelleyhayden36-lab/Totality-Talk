@@ -48,6 +48,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
 
   // AI Extraction state
   const [isExtracting, setIsExtracting] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuccessMsg, setAiSuccessMsg] = useState<string | null>(null);
 
@@ -80,14 +81,11 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
   const extractedClaims = session.extractedClaims || [];
   const highlights = session.highlights || [];
 
-  // RULE: Transcriptions should ONLY be showing if actively recording OR if a recording is selected.
-  // If no selected recording and not actively recording, displayTranscripts is zero ([]).
   const isActivelyRecording = isRecording;
   const selectedRecordingId = session.selectedRecordingId;
 
-  const displayTranscripts: TranscriptItem[] = (isActivelyRecording || !!selectedRecordingId)
-    ? sessionTranscripts
-    : [];
+  // Transcriptions remain available for reference during the debate
+  const displayTranscripts: TranscriptItem[] = sessionTranscripts;
 
   // Keep latest refs for async callbacks
   const sessionRef = useRef(session);
@@ -162,7 +160,15 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             }
           }
 
+          if (interim.trim()) {
+            setInterimTranscript(interim.trim());
+            const currentSession = sessionRef.current || session;
+            const updatedSession = { ...currentSession, interimTranscript: interim.trim() };
+            updateStateOnServer({ transcriptionSession: updatedSession });
+          }
+
           if (finalTranscript.trim()) {
+            setInterimTranscript('');
             addTranscriptSegment(finalTranscript.trim());
           }
         };
@@ -222,8 +228,12 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     const updatedTranscripts = [...currentTranscripts, newItem];
     transcriptsRef.current = updatedTranscripts;
 
-    const currentSession = state?.transcriptionSession || session;
-    const updatedSession = { ...currentSession, transcripts: updatedTranscripts };
+    const currentSession = sessionRef.current || session;
+    const updatedSession = {
+      ...currentSession,
+      transcripts: updatedTranscripts,
+      interimTranscript: '',
+    };
 
     updateStateOnServer({ transcriptionSession: updatedSession });
   };
@@ -233,6 +243,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     try {
       setAiError(null);
       setRecordingTime(0);
+      setInterimTranscript('');
       audioChunksRef.current = [];
       activeStreamsRef.current = [];
 
@@ -271,7 +282,6 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             return;
           }
           if (audioSource === 'system') {
-            // Fallback attempt to getUserMedia if getDisplayMedia fails entirely
             console.warn('getDisplayMedia failed, falling back to getUserMedia:', displayErr);
           }
         }
@@ -375,20 +385,73 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             wasJustStopped: true,
             recordings: updatedRecordings,
             selectedRecordingId: newRecording.id,
+            interimTranscript: '',
           };
 
           await updateStateOnServer({ transcriptionSession: updatedSession });
-          setAiSuccessMsg('Recording saved to debate session successfully.');
-          setTimeout(() => setAiSuccessMsg(null), 4000);
+          setAiSuccessMsg('Recording saved. Running AI Gemini speech transcription on recording...');
+
+          // Automatically run full Gemini AI speech transcription on saved recording
+          try {
+            const trRes = await fetch('/api/transcription/transcribe-audio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                audioDataUri: audioUrl,
+                title: newRecording.title,
+                seatedPanelists,
+              }),
+            });
+
+            if (trRes.ok) {
+              const trData = await trRes.json();
+              if (trData.transcripts && Array.isArray(trData.transcripts) && trData.transcripts.length > 0) {
+                const aiTranscripts: TranscriptItem[] = trData.transcripts.map((t: any, idx: number) => ({
+                  id: `tr_ai_${Date.now()}_${idx}`,
+                  timestampSeconds: t.timestampSeconds || 0,
+                  formattedTime: t.formattedTime || '00:00',
+                  speaker: t.speaker || 'Speaker',
+                  text: t.text,
+                }));
+
+                const existingTrans = currentSession.transcripts || [];
+                const combinedTranscripts = [...existingTrans, ...aiTranscripts];
+
+                const finalSession = {
+                  ...updatedSession,
+                  transcripts: combinedTranscripts,
+                  extractedClaims: trData.claims && Array.isArray(trData.claims) ? [
+                    ...trData.claims.map((c: any) => ({
+                      id: `cc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      text: c.text,
+                      confidenceScore: c.confidenceScore || 0.88,
+                      timestampSeconds: c.timestampSeconds || 0,
+                      formattedTime: c.formattedTime || formatTime(c.timestampSeconds || 0),
+                      possibleSpeaker: c.possibleSpeaker || 'Speaker',
+                      assignedToParticipantId: '',
+                      status: 'pending' as const,
+                    })),
+                    ...(currentSession.extractedClaims || []),
+                  ] : (currentSession.extractedClaims || []),
+                };
+                await updateStateOnServer({ transcriptionSession: finalSession });
+                setAiSuccessMsg(`Saved recording transcribed via Gemini AI (${aiTranscripts.length} lines processed).`);
+                setTimeout(() => setAiSuccessMsg(null), 4000);
+              }
+            }
+          } catch (e) {
+            console.warn('AI transcription processing notice:', e);
+          }
         };
       };
 
       mediaRecorder.start(1000);
       mediaRecorderRef.current = mediaRecorder;
+      isRecordingRef.current = true;
       setIsRecording(true);
 
-      // Sync isRecording status to server state for live stage display & reset transcripts for new live speech session
-      const startSession = { ...sessionRef.current, isRecording: true, wasJustStopped: false, transcripts: [] };
+      // Sync isRecording status to server state for live stage display
+      const startSession = { ...sessionRef.current, isRecording: true, wasJustStopped: false, interimTranscript: '' };
       updateStateOnServer({ transcriptionSession: startSession });
 
       // Start timer
@@ -411,30 +474,30 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
 
   // Stop Recording
   const handleStopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      setIsRecording(false);
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-      }
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
-      }
-
-      // Sync isRecording: false & wasJustStopped: true to server state
-      const stopSession = { ...(sessionRef.current || session), isRecording: false, wasJustStopped: true };
-      updateStateOnServer({ transcriptionSession: stopSession });
-
-      // Request final data from mediaRecorder and stop cleanly
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    setInterimTranscript('');
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+    }
+    if (recognitionRef.current) {
       try {
-        if (mediaRecorderRef.current.state !== 'inactive') {
-          mediaRecorderRef.current.requestData();
-          mediaRecorderRef.current.stop();
-        }
-      } catch (e) {
-        console.warn('Notice stopping MediaRecorder:', e);
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+
+    // Sync isRecording: false & wasJustStopped: true to server state
+    const stopSession = { ...(sessionRef.current || session), isRecording: false, wasJustStopped: true, interimTranscript: '' };
+    updateStateOnServer({ transcriptionSession: stopSession });
+
+    // Request final data from mediaRecorder and stop cleanly
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.requestData();
+        mediaRecorderRef.current.stop();
       }
+    } catch (e) {
+      console.warn('Notice stopping MediaRecorder:', e);
     }
   };
 

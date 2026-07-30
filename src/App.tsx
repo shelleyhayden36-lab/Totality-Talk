@@ -46,6 +46,7 @@ import {
   ArrowUp,
   ArrowDown,
   Edit,
+  Edit3,
   BookOpen,
   RotateCw,
   Upload,
@@ -505,6 +506,7 @@ export interface DebateState {
   seatHistory?: Array<{ team: 'PROPOSER' | 'CONTRARY'; seat: number; name: string; round?: string; timestamp: number }>;
   savedDebates?: any[];
   transcriptionSession?: any;
+  floorText?: string;
   resetTimestamp?: number;
   lastUpdated?: number;
   webhookLogs?: WebhookLogEntry[];
@@ -1331,17 +1333,32 @@ export default function App() {
     return <JudgePortal state={state} onStateUpdate={updateStateOnServer} formatTime={formatTime} />;
   }
 
-  const getEnabledPhases = () => {
+  const getEnabledPhases = (targetRound?: string) => {
+    const currentRoundName = targetRound || state?.currentRound || 'Round 1';
+    const count = state?.settings?.roundsCount || 3;
+    const rounds: string[] = [];
+    for (let i = 1; i <= count; i++) {
+      if (i === count && count > 1) {
+        rounds.push('Final Round');
+      } else {
+        rounds.push(`Round ${i}`);
+      }
+    }
+    const isFirstRound = rounds.length > 0 ? currentRoundName === rounds[0] : (currentRoundName === 'Round 1');
+    const isFinalRound = rounds.length > 0 ? currentRoundName === rounds[rounds.length - 1] : (currentRoundName === 'Final Round' || count === 1);
+
     let phasesList = [];
     if (!state?.settings?.phases) {
       phasesList = [
-        { id: 'LOBBY', name: 'Lobby', timerLength: 0, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
-        { id: 'OPENING', name: 'Opening', timerLength: 120, enabled: true, videoUrl: 'https://assets.totalitytalk.com/videos/lobby_intro.mp4', videoPlayTiming: 'beginning' },
-        { id: 'CROSS EXAM', name: 'Cross-Examination', timerLength: 90, enabled: true },
-        { id: 'REBUTTAL_OPPOSITION', name: 'Rebuttal Opposition', timerLength: 240, enabled: true },
-        { id: 'REBUTTAL_AFFIRMATIVE', name: 'Rebuttal Affirmative', timerLength: 240, enabled: true },
-        { id: 'CHAT Q', name: 'Chat Questions', timerLength: 180, enabled: true },
-        { id: 'HIGHLIGHT', name: 'Highlight', timerLength: 120, enabled: true }
+        { id: 'LOBBY', name: 'Lobby', order: 1, timerLength: 0, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
+        { id: 'OPENING', name: 'Opening', order: 2, timerLength: 120, enabled: true, videoUrl: 'https://assets.totalitytalk.com/videos/lobby_intro.mp4', videoPlayTiming: 'beginning' },
+        { id: 'CROSS EXAM', name: 'Cross-Examination', order: 3, timerLength: 90, enabled: true },
+        { id: 'REBUTTAL_OPPOSITION', name: 'Rebuttal Opposition', order: 4, timerLength: 240, enabled: true },
+        { id: 'REBUTTAL_AFFIRMATIVE', name: 'Rebuttal Affirmative', order: 5, timerLength: 240, enabled: true },
+        { id: 'CHAT Q', name: 'Chat Questions', order: 6, timerLength: 180, enabled: true },
+        { id: 'HIGHLIGHT', name: 'Highlight', order: 7, timerLength: 120, enabled: true },
+        { id: 'CLOSING', name: 'Closing Statements', order: 8, timerLength: 180, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
+        { id: 'FLOOR', name: 'The Floor', order: 9, timerLength: 300, enabled: true, videoUrl: '', videoPlayTiming: 'none' }
       ];
     } else {
       phasesList = [...state.settings.phases];
@@ -1355,7 +1372,6 @@ export default function App() {
           { id: 'REBUTTAL_AFFIRMATIVE', name: 'Rebuttal Affirmative', timerLength: oldRebuttal.timerLength || 240, enabled: oldRebuttal.enabled, order: oldRebuttal.order + 0.5, videoUrl: oldRebuttal.videoUrl, videoPlayTiming: oldRebuttal.videoPlayTiming }
         ];
         phasesList.splice(rebuttalIdx, 1, ...newPhases);
-        // Resort and re-index orders sequentially
         phasesList = phasesList.sort((a, b) => a.order - b.order);
         phasesList.forEach((p, idx) => {
           p.order = idx + 1;
@@ -1367,18 +1383,31 @@ export default function App() {
         .sort((a, b) => a.order - b.order);
     }
 
-    // Dynamic ending flow if Final Round or current phase is CLOSING
-    if (state?.currentRound === 'Final Round' || state?.currentPhase === 'CLOSING') {
-      // 1. Replace Highlight with Closing Statements
-      phasesList = phasesList.map(p => {
-        if (p.id === 'HIGHLIGHT') {
-          return { ...p, id: 'CLOSING', name: 'Closing Statements' };
-        }
-        return p;
-      });
+    if (!phasesList.some(p => p.id === 'LOBBY')) {
+      phasesList.push({ id: 'LOBBY', name: 'Lobby', order: 1, timerLength: 0, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
+    }
+    if (!phasesList.some(p => p.id === 'CLOSING' || p.id === 'CLOSING_STATEMENTS')) {
+      phasesList.push({ id: 'CLOSING', name: 'Closing Statements', order: 8, timerLength: 180, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
+    }
+    if (!phasesList.some(p => p.id === 'FLOOR' || p.id === 'THE_FLOOR')) {
+      phasesList.push({ id: 'FLOOR', name: 'The Floor', order: 9, timerLength: 300, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
     }
 
-    return phasesList;
+    // Filter phases according to round rules:
+    // 1. Lobby ONLY in Round 1
+    // 2. Closing Statements and Floor ONLY in Final Round (after Closing Statements)
+    return phasesList
+      .filter(p => {
+        const pid = p.id.toUpperCase();
+        if (pid === 'LOBBY') {
+          return isFirstRound;
+        }
+        if (pid === 'CLOSING' || pid === 'CLOSING_STATEMENTS' || pid === 'FLOOR' || pid === 'THE_FLOOR') {
+          return isFinalRound;
+        }
+        return true;
+      })
+      .sort((a, b) => a.order - b.order);
   };
 
   const getRoundsList = () => {
@@ -1424,17 +1453,25 @@ export default function App() {
 
   // Actions
   const handleSelectRound = (round: string) => {
+    const validPhases = getEnabledPhases(round);
     const updates: Partial<DebateState> = { currentRound: round };
-    if (round === 'Final Round') {
-      if (state.currentPhase === 'HIGHLIGHT') {
-        updates.currentPhase = 'CLOSING';
+
+    // Auto-adjust currentPhase if it is not valid for the target round
+    const isCurrentValid = validPhases.some(p => p.id === state.currentPhase);
+    if (!isCurrentValid && validPhases.length > 0) {
+      const defaultPhase = validPhases.find(p => p.id === 'OPENING') || validPhases[0];
+      updates.currentPhase = defaultPhase.id;
+      updates.timer = {
+        ...state.timer,
+        duration: defaultPhase.timerLength || 120,
+        timeLeft: defaultPhase.timerLength || 120,
+        isRunning: false
+      };
+      if (defaultPhase.id === 'CLOSING') {
         updates.closingSubPhase = 'STATEMENTS';
       }
-    } else {
-      if (state.currentPhase === 'CLOSING') {
-        updates.currentPhase = 'HIGHLIGHT';
-      }
     }
+
     updateStateOnServer(updates);
   };
 
@@ -1451,6 +1488,8 @@ export default function App() {
       if (phaseId === 'REBUTTAL' || phaseId === 'REBUTTAL_OPPOSITION' || phaseId === 'REBUTTAL_AFFIRMATIVE') newDuration = 240;
       if (phaseId === 'CHAT Q') newDuration = 180;
       if (phaseId === 'HIGHLIGHT') newDuration = 120;
+      if (phaseId === 'CLOSING') newDuration = 180;
+      if (phaseId === 'FLOOR') newDuration = 300;
     }
 
     const updates: any = { 
@@ -4454,7 +4493,77 @@ export default function App() {
                   :
                     <div className="contents">
                       <div className="bg-[#101114] border border-[#1d1e24] rounded-xl p-4 shrink-0">
-                      {selectedSpeaker ? (
+                      {state.currentPhase?.toUpperCase().includes('FLOOR') ? (
+                        <div className="flex flex-col gap-3">
+                          <div className="flex items-center justify-between border-b border-cyan-500/30 pb-2">
+                            <div className="flex items-center gap-2 text-cyan-400">
+                              <Edit3 className="w-4 h-4 animate-pulse" />
+                              <span className="text-xs font-black uppercase tracking-wider">
+                                THE FLOOR · HOST DESK PROJECTION
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-cyan-300 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30">
+                              STAGE PROJECTION CONTROL
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-gray-300 leading-relaxed">
+                            Type anything below to project live on the stage floor in real-time. No speaker selection required.
+                          </p>
+
+                          <textarea
+                            value={state.floorText || ''}
+                            onChange={(e) => updateStateOnServer({ floorText: e.target.value })}
+                            placeholder="Type anything here to project live on the stage floor (e.g. Open Topic, Floor Prompt, Announcement)..."
+                            rows={3}
+                            className="w-full bg-[#0d0e12] border border-cyan-500/40 focus:border-cyan-300 text-white placeholder-cyan-500/40 p-3 rounded-lg text-sm font-bold focus:outline-none focus:ring-1 focus:ring-cyan-400 resize-none font-sans"
+                          />
+
+                          {/* Quick Presets */}
+                          <div className="flex flex-wrap gap-1.5 items-center">
+                            <span className="text-[10px] font-mono text-cyan-400 uppercase font-bold mr-1">
+                              Quick Prompts:
+                            </span>
+                            {[
+                              "🎯 Open Floor Discussion: Audience & Panelist Q&A",
+                              "⚡ Rapid Fire Rebuttal: Any Speaker Step Up",
+                              "💡 Free-Form Cross Examination on Evidence",
+                              "📢 Final Remarks & Audience Vote Standby"
+                            ].map((preset, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => updateStateOnServer({ floorText: preset })}
+                                className="px-2 py-1 bg-[#16171d] hover:bg-cyan-500/20 border border-[#2d2f39] hover:border-cyan-400/50 text-cyan-300 text-[10px] font-mono rounded-md transition-all text-left truncate max-w-[200px] cursor-pointer"
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                            {state.floorText && (
+                              <button
+                                type="button"
+                                onClick={() => updateStateOnServer({ floorText: '' })}
+                                className="px-2 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 text-[10px] font-mono rounded-md transition-all cursor-pointer font-bold"
+                              >
+                                Clear Text
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Live Speech Transcriber Banner for Floor */}
+                          <div className="p-2.5 bg-[#080d1a] border border-cyan-500/20 rounded-lg flex items-center justify-between text-xs mt-1">
+                            <div className="flex items-center gap-2">
+                              <Mic className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                              <span className="text-[10px] font-mono font-bold text-cyan-300">
+                                LIVE SPEECH TRANSCRIBER STREAMING TO STAGE
+                              </span>
+                            </div>
+                            <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                              SPEAKER SELECTION NOT REQUIRED
+                            </span>
+                          </div>
+                        </div>
+                      ) : selectedSpeaker ? (
                         <div className="flex flex-col gap-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">

@@ -41,11 +41,12 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
   // Session Transcripts & Live Recording State directly from server state
   const session = state?.transcriptionSession;
   const transcripts = session?.transcripts || [];
+  const interimTranscript = session?.interimTranscript || '';
   const isRecordingSession = !!session?.isRecording;
   const selectedRecordingId = session?.selectedRecordingId;
 
-  // Show teleprompter ONLY when actively recording OR when a recording is selected
-  const hasLiveSpeech = (isRecordingSession || !!selectedRecordingId) && transcripts.length > 0;
+  // Show teleprompter whenever actively recording OR when a recording is selected OR when transcripts exist
+  const hasLiveSpeech = isRecordingSession || !!selectedRecordingId || transcripts.length > 0 || !!interimTranscript;
 
   const [isUserHovering, setIsUserHovering] = useState(false);
 
@@ -147,6 +148,21 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
                     {t.text}
                   </motion.p>
                 ))}
+                {interimTranscript && (
+                  <motion.p 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-lg sm:text-2xl font-bold text-cyan-300 italic leading-[1.85] tracking-wide font-sans select-text max-w-4xl mx-auto animate-pulse"
+                  >
+                    "{interimTranscript}..."
+                  </motion.p>
+                )}
+                {isRecordingSession && transcripts.length === 0 && !interimTranscript && (
+                  <div className="flex flex-col items-center justify-center py-12 text-center text-cyan-400">
+                    <Mic className="w-8 h-8 animate-pulse mb-2" />
+                    <p className="text-lg font-bold">Listening... Speak into microphone or computer audio input.</p>
+                  </div>
+                )}
               </div>
 
               {/* BOTTOM FADE OVERLAY FOR CINEMATIC CRAWL */}

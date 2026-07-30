@@ -357,9 +357,23 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
                         </p>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2 py-1 px-2 bg-slate-900/60 rounded-lg border border-gray-800 text-xs text-gray-400 italic">
-                        <Brain className="w-4 h-4 text-cyan-400 animate-pulse shrink-0" />
-                        <span className="text-[11px]">Transcribing live rebuttal audio... Extracting counterclaims targeting this claim.</span>
+                      <div className="flex flex-col gap-1 py-1 px-2.5 bg-slate-900/60 rounded-lg border border-gray-800 text-xs text-gray-400">
+                        {(state?.transcriptionSession?.interimTranscript || (state?.transcriptionSession?.transcripts && state.transcriptionSession.transcripts.length > 0)) ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] font-mono font-black uppercase text-cyan-400 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 animate-spin" style={{ animationDuration: '4s' }} />
+                              LIVE TRANSCRIPTION:
+                            </span>
+                            <p className="text-xs font-bold text-white italic leading-snug">
+                              "{state?.transcriptionSession?.interimTranscript || state?.transcriptionSession?.transcripts[state.transcriptionSession.transcripts.length - 1]?.text}"
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Brain className="w-4 h-4 text-cyan-400 animate-pulse shrink-0" />
+                            <span className="text-[11px]">Transcribing live rebuttal audio... Extracting counterclaims targeting this claim.</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

@@ -314,6 +314,7 @@ interface DebateState {
   lastUpdated?: number;
   completedSpeakers?: string[];
   closingSubPhase?: string;
+  floorText?: string;
   webhookLogs?: WebhookLogEntry[];
 }
 
@@ -426,7 +427,9 @@ let state: DebateState = {
       { id: 'REBUTTAL_OPPOSITION', name: 'Rebuttal Opposition', order: 4, timerLength: 240, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
       { id: 'REBUTTAL_AFFIRMATIVE', name: 'Rebuttal Affirmative', order: 5, timerLength: 240, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
       { id: 'CHAT Q', name: 'Chat Questions', order: 6, timerLength: 180, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
-      { id: 'HIGHLIGHT', name: 'Highlight', order: 7, timerLength: 120, enabled: true, videoUrl: '', videoPlayTiming: 'none' }
+      { id: 'HIGHLIGHT', name: 'Highlight', order: 7, timerLength: 120, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
+      { id: 'CLOSING', name: 'Closing Statements', order: 8, timerLength: 180, enabled: true, videoUrl: '', videoPlayTiming: 'none' },
+      { id: 'FLOOR', name: 'The Floor', order: 9, timerLength: 300, enabled: true, videoUrl: '', videoPlayTiming: 'none' }
     ],
     scoringSettings: {
       judgeScore: { enabled: true, weight: 60 },
@@ -581,20 +584,42 @@ function loadStateFromDisk() {
 
 loadStateFromDisk();
 
-function getEnabledPhasesList(): DebatePhase[] {
+function getEnabledPhasesList(targetRound?: string): DebatePhase[] {
+  const currentRoundName = targetRound || state.currentRound || 'Round 1';
+  const count = state.settings?.roundsCount || 3;
+  const rounds: string[] = [];
+  for (let i = 1; i <= count; i++) {
+    if (i === count && count > 1) {
+      rounds.push('Final Round');
+    } else {
+      rounds.push(`Round ${i}`);
+    }
+  }
+  const isFirstRound = rounds.length > 0 ? currentRoundName === rounds[0] : (currentRoundName === 'Round 1');
+  const isFinalRound = rounds.length > 0 ? currentRoundName === rounds[rounds.length - 1] : (currentRoundName === 'Final Round' || count === 1);
+
   let phasesList = (state.settings?.phases || [])
     .filter((p: any) => p.enabled)
     .sort((a: any, b: any) => a.order - b.order);
 
-  if (state.currentRound === 'Final Round' || state.currentPhase === 'CLOSING') {
-    phasesList = phasesList.map((p: any) => {
-      if (p.id === 'HIGHLIGHT') {
-        return { ...p, id: 'CLOSING', name: 'Closing Statements' };
-      }
-      return p;
-    });
+  if (!phasesList.some((p: any) => p.id === 'LOBBY')) {
+    phasesList.push({ id: 'LOBBY', name: 'Lobby', order: 1, timerLength: 0, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
   }
-  return phasesList;
+  if (!phasesList.some((p: any) => p.id === 'CLOSING' || p.id === 'CLOSING_STATEMENTS')) {
+    phasesList.push({ id: 'CLOSING', name: 'Closing Statements', order: 8, timerLength: 180, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
+  }
+  if (!phasesList.some((p: any) => p.id === 'FLOOR' || p.id === 'THE_FLOOR')) {
+    phasesList.push({ id: 'FLOOR', name: 'The Floor', order: 9, timerLength: 300, enabled: true, videoUrl: '', videoPlayTiming: 'none' });
+  }
+
+  return phasesList
+    .filter((p: any) => {
+      const pid = p.id.toUpperCase();
+      if (pid === 'LOBBY') return isFirstRound;
+      if (pid === 'CLOSING' || pid === 'CLOSING_STATEMENTS' || pid === 'FLOOR' || pid === 'THE_FLOOR') return isFinalRound;
+      return true;
+    })
+    .sort((a: any, b: any) => a.order - b.order);
 }
 
 function advanceDebateQueue() {
@@ -638,7 +663,7 @@ function advanceDebateQueue() {
 
     // Determine upcoming speakers for this phase
     let speakersQueue: string[] = [];
-    if (['OPENING', 'REBUTTAL', 'REBUTTAL_OPPOSITION', 'REBUTTAL_AFFIRMATIVE', 'CLOSING', 'CROSS EXAM', 'HIGHLIGHT'].includes(nextPhaseId)) {
+    if (['OPENING', 'REBUTTAL', 'REBUTTAL_OPPOSITION', 'REBUTTAL_AFFIRMATIVE', 'CLOSING', 'CROSS EXAM', 'HIGHLIGHT', 'FLOOR'].includes(nextPhaseId)) {
       const seated = state.participants.filter(p => p.isSeated && p.status !== 'pending');
       const pros = seated.filter(p => p.role === 'PROPOSER');
       const cons = seated.filter(p => p.role === 'CONTRARY');
@@ -838,34 +863,63 @@ async function startServer() {
       conJudgeRaw = valCon <= 10 ? valCon * 10 : valCon;
     } else {
       const calculateJudgeTeamScore = (team: 'PROPOSER' | 'CONTRARY') => {
-        const perspectives = ['Evidence-Based', 'Consensus-Based', 'Intuition-Based', 'Wild Card', 'PROPOSER', 'CONTRARY', 'NEUTRAL'];
+        const judgeAccounts = s.settings?.judgeAccounts || [];
+        
+        // Group judges by their perspective or category (or 'NEUTRAL' fallback)
+        const groups: Record<string, any[]> = {};
+        if (judgeAccounts.length > 0) {
+          judgeAccounts.forEach(j => {
+            const grp = j.perspective || j.category || 'NEUTRAL';
+            if (!groups[grp]) groups[grp] = [];
+            groups[grp].push(j);
+          });
+        } else {
+          // If no accounts exist in settings, treat all ballots as a single neutral group
+          groups['NEUTRAL'] = [];
+        }
+
         let groupSums = 0;
         let groupCount = 0;
 
-        perspectives.forEach(pName => {
-          const judgesInGroup = s.settings.judgeAccounts.filter(j => j.perspective === pName || j.category === pName);
-          if (judgesInGroup.length === 0) return;
-
+        Object.values(groups).forEach(judgesInGroup => {
           let judgeSums = 0;
           let judgeCount = 0;
 
-          judgesInGroup.forEach(judge => {
-            const ballots = (s.judgeBallots || []).filter(b => b.judgeId === judge.id && b.team === team);
-            if (ballots.length === 0) return;
+          if (judgesInGroup.length > 0) {
+            judgesInGroup.forEach(judge => {
+              const ballots = (s.judgeBallots || []).filter(b => b.judgeId === judge.id && b.team === team);
+              if (ballots.length === 0) return;
 
-            let ballotSums = 0;
-            ballots.forEach(b => {
-              const scoresList = Object.values(b.scores) as number[];
-              if (scoresList.length > 0) {
-                ballotSums += scoresList.reduce((sum, val) => sum + (Number(val) || 0), 0) / scoresList.length;
-              } else {
-                ballotSums += 5;
-              }
+              let ballotSums = 0;
+              ballots.forEach(b => {
+                const scoresList = Object.values(b.scores || {}) as number[];
+                if (scoresList.length > 0) {
+                  ballotSums += scoresList.reduce((sum, val) => sum + (Number(val) || 0), 0) / scoresList.length;
+                } else {
+                  ballotSums += 5;
+                }
+              });
+
+              judgeSums += ballotSums / ballots.length;
+              judgeCount++;
             });
-
-            judgeSums += ballotSums / ballots.length;
-            judgeCount++;
-          });
+          } else {
+            // Direct ballot check if no judge accounts exist
+            const teamBallots = (s.judgeBallots || []).filter(b => b.team === team);
+            if (teamBallots.length > 0) {
+              let ballotSums = 0;
+              teamBallots.forEach(b => {
+                const scoresList = Object.values(b.scores || {}) as number[];
+                if (scoresList.length > 0) {
+                  ballotSums += scoresList.reduce((sum, val) => sum + (Number(val) || 0), 0) / scoresList.length;
+                } else {
+                  ballotSums += 5;
+                }
+              });
+              judgeSums += ballotSums / teamBallots.length;
+              judgeCount++;
+            }
+          }
 
           if (judgeCount > 0) {
             const groupAvg = judgeSums / judgeCount;
@@ -1943,7 +1997,7 @@ async function startServer() {
     let newConScore = 0;
 
     state.judgeBallots.forEach((b: any) => {
-      const sum = Object.values(b.scores).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0) as number;
+      const sum = Object.values(b.scores || {}).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0) as number;
       const penalties = Number(b.penalties) || 0;
       const net = Math.max(0, sum - penalties);
       
@@ -1958,6 +2012,9 @@ async function startServer() {
       proScore: newProScore,
       conScore: newConScore
     };
+
+    updateScoringCalculations();
+    saveStateToDisk();
 
     res.json({ success: true, state });
   });
@@ -1985,7 +2042,7 @@ async function startServer() {
     let newConScore = 0;
 
     state.judgeBallots.forEach((b: any) => {
-      const sum = Object.values(b.scores).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0) as number;
+      const sum = Object.values(b.scores || {}).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0) as number;
       const penalties = Number(b.penalties) || 0;
       const net = Math.max(0, sum - penalties);
       
@@ -2001,8 +2058,8 @@ async function startServer() {
       conScore: newConScore
     };
 
-    // Calculate scoring calculations
-    state.scoringCalculations = calculateScoring(state);
+    updateScoringCalculations();
+    saveStateToDisk();
 
     res.json({ success: true, state });
   });

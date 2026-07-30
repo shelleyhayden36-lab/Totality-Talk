@@ -73,10 +73,10 @@
   "showPopularVoteWidget": false,
   "introVideoPlaying": false,
   "currentRound": "Round 1",
-  "currentPhase": "CHAT Q",
+  "currentPhase": "REBUTTAL_AFFIRMATIVE",
   "timer": {
-    "duration": 180,
-    "timeLeft": 180,
+    "duration": 240,
+    "timeLeft": 240,
     "isRunning": false
   },
   "tikfinityEvents": [
@@ -117,7 +117,7 @@
       "status": "approved"
     }
   ],
-  "currentSpeakerId": null,
+  "currentSpeakerId": "p-custom-1785052847370-558",
   "crossExamQuestionerId": null,
   "crossExamRespondentId": null,
   "crossExamSubPhase": "QUESTION",
@@ -187,7 +187,7 @@
       "team": "Affirmative",
       "phase": "OPENING",
       "claimText": "The earth is flat",
-      "status": "VERIFIED",
+      "status": "approved",
       "visualImageUrl": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20800%20800%22%20width%3D%22800%22%20height%3D%22800%22%20style%3D%22background%3A%2305070a%3B%20font-family%3A%20system-ui%2C%20-apple-system%2C%20sans-serif%3B%22%3E%0A%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%3Cfilter%20id%3D%22glowCyan%22%20x%3D%22-20%25%22%20y%3D%22-20%25%22%20width%3D%22140%25%22%20height%3D%22140%25%22%3E%0A%20%20%20%20%20%20%20%20%3CfeGaussianBlur%20stdDeviation%3D%228%22%20result%3D%22blur%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3CfeMerge%3E%0A%20%20%20%20%20%20%20%20%20%20%3CfeMergeNode%20in%3D%22blur%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3CfeMergeNode%20in%3D%22SourceGraphic%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FfeMerge%3E%0A%20%20%20%20%20%20%3C%2Ffilter%3E%0A%20%20%20%20%3C%2Fdefs%3E%0A%0A%20%20%20%20%3C!--%20Dark%20Studio%20Background%20--%3E%0A%20%20%20%20%3Crect%20width%3D%22800%22%20height%3D%22800%22%20fill%3D%22%2305070a%22%20%2F%3E%0A%0A%20%20%20%20%3C!--%20Subtle%20Circular%20HUD%20Grid%20lines%20--%3E%0A%20%20%20%20%3Cg%20opacity%3D%220.15%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221%22%20fill%3D%22none%22%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22400%22%20cy%3D%22400%22%20r%3D%22360%22%20stroke-dasharray%3D%2210%206%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22400%22%20cy%3D%22400%22%20r%3D%22270%22%20stroke-dasharray%3D%226%204%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22400%22%20cy%3D%22400%22%20r%3D%22180%22%20%2F%3E%0A%20%20%20%20%20%20%3Cline%20x1%3D%2240%22%20y1%3D%22400%22%20x2%3D%22760%22%20y2%3D%22400%22%20stroke-dasharray%3D%228%206%22%20%2F%3E%0A%20%20%20%20%20%20%3Cline%20x1%3D%22400%22%20y1%3D%2240%22%20x2%3D%22400%22%20y2%3D%22760%22%20stroke-dasharray%3D%228%206%22%20%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%0A%20%20%20%20%3C!--%203D%20SCHEMATIC%20MODEL%20--%3E%0A%20%20%20%20%0A%20%20%20%20%20%20%20%20%3C!--%20FLAT%20EARTH%20DISK%20SCHEMATIC%20--%3E%0A%20%20%20%20%20%20%20%20%3Cg%20filter%3D%22url(%23glowCyan)%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Outer%20Grid%20Projection%20Sphere%20Ring%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22400%22%20cy%3D%22400%22%20rx%3D%22310%22%20ry%3D%22240%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221.5%22%20stroke-dasharray%3D%228%206%22%20opacity%3D%220.4%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Main%20Flat%20Disk%20World%20Body%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22400%22%20cy%3D%22420%22%20rx%3D%22260%22%20ry%3D%2285%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.18%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%224%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22400%22%20cy%3D%22450%22%20rx%3D%22260%22%20ry%3D%2285%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222.5%22%20stroke-dasharray%3D%2210%205%22%20opacity%3D%220.6%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Ice%20Wall%20Ring%20around%20Flat%20Earth%20Edge%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M%20140%2C420%20L%20140%2C450%20A%20260%2085%200%200%200%20660%2C450%20L%20660%2C420%20A%20260%2085%200%200%201%20140%2C420%20Z%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.3%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%223%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Flat%20Continents%20on%20Surface%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M%20280%2C410%20C%20300%2C380%20340%2C390%20360%2C410%20C%20370%2C425%20340%2C435%20300%2C430%20Z%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.5%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M%20420%2C390%20C%20460%2C375%20520%2C385%20540%2C410%20C%20510%2C430%20450%2C435%20410%2C410%20Z%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.5%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M%20330%2C435%20C%20370%2C430%20420%2C440%20400%2C455%20C%20360%2C460%20320%2C450%20330%2C435%20Z%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.5%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Compass%20Rose%20%26%20Surface%20Grid%20Lines%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22400%22%20cy%3D%22420%22%20rx%3D%22180%22%20ry%3D%2255%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221.5%22%20stroke-dasharray%3D%226%204%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22400%22%20cy%3D%22420%22%20rx%3D%22100%22%20ry%3D%2230%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221.5%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cline%20x1%3D%22140%22%20y1%3D%22420%22%20x2%3D%22660%22%20y2%3D%22420%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20stroke-dasharray%3D%224%204%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cline%20x1%3D%22400%22%20y1%3D%22335%22%20x2%3D%22400%22%20y2%3D%22505%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20stroke-dasharray%3D%224%204%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Sun%20%26%20Moon%20Spotlight%20Orbits%20Above%20Disk%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Ccircle%20cx%3D%22310%22%20cy%3D%22270%22%20r%3D%2218%22%20fill%3D%22%2300f0ff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cline%20x1%3D%22310%22%20y1%3D%22288%22%20x2%3D%22310%22%20y2%3D%22390%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20stroke-dasharray%3D%224%204%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cellipse%20cx%3D%22310%22%20cy%3D%22390%22%20rx%3D%2235%22%20ry%3D%2212%22%20fill%3D%22%2300f0ff%22%20fill-opacity%3D%220.2%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221.5%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3Ccircle%20cx%3D%22490%22%20cy%3D%22290%22%20r%3D%2212%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cline%20x1%3D%22490%22%20y1%3D%22302%22%20x2%3D%22490%22%20y2%3D%22405%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%221.5%22%20stroke-dasharray%3D%224%204%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Dome%20Canopy%20Curve%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cpath%20d%3D%22M%20140%2C420%20A%20260%20220%200%200%201%20660%2C420%22%20fill%3D%22none%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20stroke-dasharray%3D%228%206%22%20opacity%3D%220.6%22%20%2F%3E%0A%0A%20%20%20%20%20%20%20%20%20%20%3C!--%20Callout%20Label%20--%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cline%20x1%3D%22520%22%20y1%3D%22390%22%20x2%3D%22620%22%20y2%3D%22310%22%20stroke%3D%22%2300f0ff%22%20stroke-width%3D%222%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Ctext%20x%3D%22625%22%20y%3D%22305%22%20font-size%3D%2214%22%20font-weight%3D%22900%22%20fill%3D%22%23ffffff%22%3EFLAT%20EARTH%20MODEL%20DISK%3C%2Ftext%3E%0A%20%20%20%20%20%20%20%20%20%20%3Ctext%20x%3D%22625%22%20y%3D%22325%22%20font-size%3D%2212%22%20font-weight%3D%22700%22%20fill%3D%22%2300f0ff%22%3ECIRCULAR%20ICE%20RIM%20BOUNDARY%3C%2Ftext%3E%0A%20%20%20%20%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%20%20%0A%20%20%3C%2Fsvg%3E",
       "visualImagePrompt": "Detailed scientific hologram blueprint diagram directly illustrating the subject matter of the claim: \"The earth is flat\". Feature complex technical schematic illustrations representing the core concepts of this claim, glowing cyan HUD vector lines, technical coordinate callouts, data graphs, metric gauges, and blueprint grid background. Totality Talk affirmative stage aesthetic, high resolution 9:16 aspect ratio. Speaker: @bob.",
       "visualGeneratedAt": "2026-07-26T08:19:27.690Z"
@@ -510,16 +510,15 @@
   "showOpeningStatementPopupForParticipantId": null,
   "openingStatementVideoPlayingForParticipantId": null,
   "debateQueue": {
-    "currentPhase": "CHAT Q",
-    "currentSpeaker": null,
+    "currentPhase": "REBUTTAL_AFFIRMATIVE",
+    "currentSpeaker": "p-custom-1785052847370-558",
     "upcomingSpeakers": [],
     "pendingEvents": [],
     "completedPhases": [
       "LOBBY",
       "OPENING",
       "CROSS EXAM",
-      "REBUTTAL_OPPOSITION",
-      "REBUTTAL_AFFIRMATIVE"
+      "REBUTTAL_OPPOSITION"
     ]
   },
   "seatHistory": [
@@ -593,7 +592,29 @@
         "extractedClaimsCount": 3
       }
     ],
-    "transcripts": [],
+    "transcripts": [
+      {
+        "id": "tr_1785449433818_1h77",
+        "timestampSeconds": 21,
+        "formattedTime": "00:21",
+        "speaker": "Affirmative (@bob)",
+        "text": "this is just a test"
+      },
+      {
+        "id": "tr_1785449449125_vpk9",
+        "timestampSeconds": 36,
+        "formattedTime": "00:36",
+        "speaker": "Affirmative (@bob)",
+        "text": "testing testing testing"
+      },
+      {
+        "id": "tr_1785449451703_xd6i",
+        "timestampSeconds": 39,
+        "formattedTime": "00:39",
+        "speaker": "Affirmative (@bob)",
+        "text": "testing testing testing"
+      }
+    ],
     "extractedClaims": [
       {
         "id": "cl_1785052016448_1_tak",
@@ -621,10 +642,12 @@
     "highlights": [],
     "selectedRecordingId": null,
     "isRecording": true,
-    "wasJustStopped": false
+    "wasJustStopped": false,
+    "interimTranscript": "around one and round two should not have closing statements either they should only have Lobby opening statements cross-examination rebuttal opposition rebuttal affirmative chat questions and"
   },
   "winnerAutoSubmitDeadline": null,
-  "lastUpdated": 1785054391946,
+  "lastUpdated": 1785450456354,
   "closingSubPhase": "STATEMENTS",
-  "completedSpeakers": []
+  "completedSpeakers": [],
+  "floorText": ""
 }

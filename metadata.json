@@ -1,0 +1,6 @@
+{
+  "name": "Totality Talk",
+  "description": "An interactive host control desk for live debate hosting, tracking speakers, claims, scores, and popups.",
+  "requestFramePermissions": ["microphone", "display-capture", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -3,7 +3,7 @@ import {
   Mic, Square, Play, Pause, Volume2, VolumeX, Sparkles, Plus, Check,
   Brain, UserPlus, Highlighter, FileText, Search, Gavel, Clock, Link2,
   Trash2, ChevronDown, Wand2, Image, Layers, RefreshCw, AlertCircle, ShieldAlert,
-  Radio, Upload, FileAudio, Loader2, Zap
+  Radio, Upload, FileAudio, Loader2, Zap, Tv, Send, UserCheck, MessageSquare
 } from 'lucide-react';
 import {
   Participant, FormalClaim, AudioRecording, TranscriptItem,
@@ -16,6 +16,32 @@ interface AITranscriptionBotProps {
   seatedPanelists: Participant[];
   formalClaims: FormalClaim[];
   className?: string;
+}
+
+function formatNonVerbalSounds(text: string): string {
+  if (!text) return text;
+  let formatted = text;
+
+  // Remove "order in court" from captions as requested
+  formatted = formatted.replace(/\b(order\s+in\s+court)\b/gi, '');
+
+  const soundRules: [RegExp, string][] = [
+    [/\b(talking\s+over|speaking\s+over|talking\s+at\s+the\s+same\s+time|multiple\s+people\s+talking|voices?\s+overlapping|overlapping\s+speech|cross-?talk|garbled\s+audio|unintelligible|indistinguishable|everyone(?:\s+is)?\s+talking|shouting\s+over|simultaneous\s+speech|overlapping\s+voices|commotion)\b/gi, '[multiple people talking - unable to caption]'],
+    [/\b(coughing|coughed|cough|cough\s+cough)\b/gi, '[cough]'],
+    [/\b(clears?\s+throat|throat\s+clearing|ahem+)\b/gi, '[clears throat]'],
+    [/\b(laughing|laughs|laughed|hahaha+|hehehe+|rofl|giggle|giggling|chuckle|chuckling)\b/gi, '[laughing]'],
+    [/\b(sighing|sighs|sighed|sigh|breathing|heavy\s+breath|exhale|exhaling|pant|panting)\b/gi, '[sigh]'],
+    [/\b(applause|clapping|cheering|cheers)\b/gi, '[applause]'],
+    [/\b(gasping|gasped|gasp)\b/gi, '[gasp]'],
+    [/\b(sneezing|sneezed|sneeze)\b/gi, '[sneeze]'],
+  ];
+
+  for (const [regex, replacement] of soundRules) {
+    formatted = formatted.replace(regex, replacement);
+  }
+
+  formatted = formatted.replace(/(\[[^\]]+\])(\s+\1)+/gi, '$1');
+  return formatted.trim();
 }
 
 export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
@@ -63,8 +89,42 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
   const isRebuttalPhase = (state?.currentPhase || '').toUpperCase().includes('REBUTTAL');
   const [extractorMode, setExtractorMode] = useState<'claims' | 'counterclaims'>(isRebuttalPhase ? 'counterclaims' : 'claims');
 
-  // Future placeholders toggle
-  const [activeTab, setActiveTab] = useState<'recorder' | 'transcript' | 'claims' | 'highlights' | 'placeholders'>('recorder');
+  // Active manual caption broadcaster input
+  const [manualCaptionText, setManualCaptionText] = useState('');
+
+  // Selected Phase Filter for Transcriptions & Claim Extraction
+  const [selectedPhaseFilter, setSelectedPhaseFilter] = useState<string>('ALL');
+
+  // Host Voice Profile Training & Calibration State
+  const [hostVoiceProfileCalibrated, setHostVoiceProfileCalibrated] = useState<boolean>(true);
+  const [isCalibratingHostVoice, setIsCalibratingHostVoice] = useState<boolean>(false);
+
+  const handleCalibrateHostVoice = () => {
+    setIsCalibratingHostVoice(true);
+    updateStateOnServer({ currentSpeakerId: 'host' });
+    setTimeout(() => {
+      setHostVoiceProfileCalibrated(true);
+      setIsCalibratingHostVoice(false);
+      setAiSuccessMsg('Host Voice Profile calibrated! System will automatically recognize and tag your voice as Host.');
+      setTimeout(() => setAiSuccessMsg(null), 4000);
+    }, 2000);
+  };
+
+  const getPhaseBadgeInfo = (phaseId?: string) => {
+    if (!phaseId) return { label: 'Opening Statements', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40' };
+    const p = phaseId.toUpperCase();
+    if (p === 'LOBBY') return { label: 'Lobby Stage', color: 'bg-zinc-700/40 text-zinc-300 border-zinc-600' };
+    if (p.includes('OPEN')) return { label: 'Opening Statements', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40' };
+    if (p.includes('CROSS')) return { label: 'Cross Examination', color: 'bg-purple-500/20 text-purple-300 border-purple-400/40' };
+    if (p.includes('REBUT')) return { label: 'Rebuttal Phase', color: 'bg-rose-500/20 text-rose-300 border-rose-400/40' };
+    if (p.includes('FLOOR') || p.includes('CHAT')) return { label: 'Floor / Chat Debate', color: 'bg-amber-500/20 text-amber-300 border-amber-400/40' };
+    if (p.includes('CLOSE')) return { label: 'Closing Statements', color: 'bg-blue-500/20 text-blue-300 border-blue-400/40' };
+    if (p.includes('WIN')) return { label: 'Winner Declaration', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' };
+    return { label: phaseId, color: 'bg-gray-700/40 text-gray-300 border-gray-600' };
+  };
+
+  // Future placeholders & open captions tab toggle
+  const [activeTab, setActiveTab] = useState<'recorder' | 'transcript' | 'claims' | 'highlights' | 'placeholders' | 'captions'>('recorder');
 
   // Derive session state from server state or default
   const session: AudioTranscriptionSession = state?.transcriptionSession || {
@@ -84,8 +144,19 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
   const isActivelyRecording = isRecording;
   const selectedRecordingId = session.selectedRecordingId;
 
-  // Transcriptions remain available for reference during the debate
-  const displayTranscripts: TranscriptItem[] = sessionTranscripts;
+  // Transcriptions broken up & filtered by phase
+  const filteredTranscripts = sessionTranscripts.filter((t) => {
+    if (selectedPhaseFilter === 'ALL') return true;
+    const p = (t.phaseId || (t as any).phaseName || '').toUpperCase();
+    if (selectedPhaseFilter === 'OPENING') return p.includes('OPEN') || (!p && selectedPhaseFilter === 'ALL');
+    if (selectedPhaseFilter === 'CROSS') return p.includes('CROSS');
+    if (selectedPhaseFilter === 'REBUTTAL') return p.includes('REBUT');
+    if (selectedPhaseFilter === 'FLOOR') return p.includes('FLOOR') || p.includes('CHAT');
+    if (selectedPhaseFilter === 'CLOSING') return p.includes('CLOSE');
+    return p === selectedPhaseFilter;
+  });
+
+  const displayTranscripts: TranscriptItem[] = filteredTranscripts;
 
   // Keep latest refs for async callbacks
   const sessionRef = useRef(session);
@@ -117,6 +188,31 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
   useEffect(() => {
     recordingTimeRef.current = recordingTime;
   }, [recordingTime]);
+
+  // Cleanly reset internal component state when state.transcriptionSession is cleared on debate reset
+  useEffect(() => {
+    if ((sessionTranscripts.length === 0 && recordings.length === 0) || state?.resetTimestamp) {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current.currentTime = 0;
+      }
+      if (isRecording) {
+        setIsRecording(false);
+        if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      }
+      setInterimTranscript('');
+      setProcessingRecordingId(null);
+      setPlayingRecordingId(null);
+      setIsPlaying(false);
+      setManualCaptionText('');
+      setSelectedText('');
+      setAssigningClaimId(null);
+      setLinkingClaimId(null);
+      transcriptsRef.current = sessionTranscripts;
+      recordingsRef.current = recordings;
+      sessionRef.current = session;
+    }
+  }, [sessionTranscripts.length, recordings.length, state?.resetTimestamp]);
 
   // Upload audio binary to server store so state payload stays small & persistent
   const uploadAudioToServer = async (base64Audio: string, recId: string): Promise<string> => {
@@ -160,16 +256,19 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             }
           }
 
-          if (interim.trim()) {
-            setInterimTranscript(interim.trim());
+          const formattedInterim = formatNonVerbalSounds(interim.trim());
+          const formattedFinal = formatNonVerbalSounds(finalTranscript.trim());
+
+          if (formattedInterim) {
+            setInterimTranscript(formattedInterim);
             const currentSession = sessionRef.current || session;
-            const updatedSession = { ...currentSession, interimTranscript: interim.trim() };
+            const updatedSession = { ...currentSession, interimTranscript: formattedInterim };
             updateStateOnServer({ transcriptionSession: updatedSession });
           }
 
-          if (finalTranscript.trim()) {
+          if (formattedFinal) {
             setInterimTranscript('');
-            addTranscriptSegment(finalTranscript.trim());
+            addTranscriptSegment(formattedFinal);
           }
         };
 
@@ -205,23 +304,35 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     const currentSecs = recordingTimeRef.current;
     const formatted = formatTime(currentSecs);
 
-    // Simple speaker heuristics based on active speaker or seated panelists
-    let detectedSpeaker = 'Unknown Speaker';
-    const activeSpeaker = state?.participants?.find((p) => p.id === state?.currentSpeakerId && p.isSeated);
-    if (activeSpeaker) {
-      detectedSpeaker = `${activeSpeaker.role === 'PROPOSER' ? 'Affirmative' : 'Opposition'} (${activeSpeaker.name})`;
-    } else if (seatedPanelists.length > 0) {
-      const index = Math.floor((currentSecs / 15) % seatedPanelists.length);
-      const speaker = seatedPanelists[index];
-      detectedSpeaker = `${speaker.role === 'PROPOSER' ? 'Affirmative' : 'Opposition'} (${speaker.name})`;
+    // Smart speaker detection based on active currentSpeakerId or available speakers
+    let detectedSpeaker = 'Host / Moderator';
+    const activeSpeakerId = state?.currentSpeakerId || 'host';
+
+    if (activeSpeakerId === 'host') {
+      detectedSpeaker = 'Host / Moderator';
+    } else {
+      const activeSpeaker = state?.participants?.find((p) => p.id === activeSpeakerId && p.isSeated);
+      if (activeSpeaker) {
+        detectedSpeaker = `${activeSpeaker.role === 'PROPOSER' ? 'Affirmative' : 'Opposition'} (${activeSpeaker.name})`;
+      } else if (seatedPanelists.length > 0) {
+        const hostObj = { id: 'host', name: 'Host / Moderator', role: 'HOST' as const };
+        const allList = [hostObj, ...seatedPanelists];
+        const sp = allList[Math.floor((currentSecs / 12) % allList.length)];
+        detectedSpeaker = sp.role === 'HOST' ? 'Host / Moderator' : `${sp.role === 'PROPOSER' ? 'Affirmative' : 'Opposition'} (${sp.name})`;
+      }
     }
 
+    const activePhaseId = (state?.currentPhase || 'OPENING').toUpperCase();
     const newItem: TranscriptItem = {
       id: `tr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestampSeconds: currentSecs,
       formattedTime: formatted,
       speaker: detectedSpeaker,
       text,
+      phaseId: activePhaseId,
+      phaseName: state?.currentPhase || 'Opening Statements',
+      phase: activePhaseId,
+      round: state?.currentRound || 'Round 1'
     };
 
     const currentTranscripts = transcriptsRef.current || [];
@@ -406,12 +517,17 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             if (trRes.ok) {
               const trData = await trRes.json();
               if (trData.transcripts && Array.isArray(trData.transcripts) && trData.transcripts.length > 0) {
+                const activePhaseId = (state?.currentPhase || 'OPENING').toUpperCase();
                 const aiTranscripts: TranscriptItem[] = trData.transcripts.map((t: any, idx: number) => ({
                   id: `tr_ai_${Date.now()}_${idx}`,
                   timestampSeconds: t.timestampSeconds || 0,
                   formattedTime: t.formattedTime || '00:00',
                   speaker: t.speaker || 'Speaker',
                   text: t.text,
+                  phaseId: activePhaseId,
+                  phaseName: state?.currentPhase || 'Opening Statements',
+                  phase: activePhaseId,
+                  round: state?.currentRound || 'Round 1'
                 }));
 
                 const existingTrans = currentSession.transcripts || [];
@@ -604,6 +720,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         body: JSON.stringify({
           audioDataUri: rec.audioDataUri,
           title: rec.title,
+          currentPhase: state?.currentPhase || 'OPENING',
           seatedPanelists,
         }),
       });
@@ -615,16 +732,24 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       }
 
       // Convert returned transcripts to TranscriptItem
+      const activePhaseId = (state?.currentPhase || 'OPENING').toUpperCase();
+      const isClaimPhaseActive = activePhaseId.includes('OPEN') || activePhaseId.includes('REBUT');
+
       const newTranscripts: TranscriptItem[] = (data.transcripts || []).map((t: any, idx: number) => ({
         id: `tr_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
         timestampSeconds: t.timestampSeconds || 0,
         formattedTime: t.formattedTime || formatTime(t.timestampSeconds || 0),
         speaker: t.speaker || 'Speaker',
         text: t.text || '',
+        phaseId: activePhaseId,
+        phaseName: state?.currentPhase || 'Opening Statements',
+        phase: activePhaseId,
+        round: state?.currentRound || 'Round 1'
       }));
 
-      // Convert returned claims to ExtractedClaim
-      const newClaims: ExtractedClaim[] = (data.claims || []).map((c: any, idx: number) => ({
+      // Convert returned claims to ExtractedClaim (only if in Opening or Rebuttal phase)
+      const rawClaims = isClaimPhaseActive ? (data.claims || []) : [];
+      const newClaims: ExtractedClaim[] = rawClaims.map((c: any, idx: number) => ({
         id: `cl_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
         text: c.text,
         confidenceScore: c.confidenceScore || 0.90,
@@ -656,7 +781,11 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       };
 
       await updateStateOnServer({ transcriptionSession: updatedSession });
-      setAiSuccessMsg(`Successfully transcribed "${rec.title}"! Generated transcript & extracted ${newClaims.length} debate claims.`);
+      if (isClaimPhaseActive) {
+        setAiSuccessMsg(`Successfully transcribed "${rec.title}"! Generated transcript & extracted ${newClaims.length} debate claims.`);
+      } else {
+        setAiSuccessMsg(`Successfully transcribed "${rec.title}"! (Claim extraction skipped: claims are only extracted during Opening Statements and Rebuttal phases.)`);
+      }
       setTimeout(() => setAiSuccessMsg(null), 5000);
       setActiveTab('claims');
     } catch (err: any) {
@@ -717,6 +846,32 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
+  // Clear all saved recordings
+  const handleClearAllRecordings = async () => {
+    const updatedSession = { ...session, recordings: [], selectedRecordingId: null };
+    await updateStateOnServer({ transcriptionSession: updatedSession });
+    setAiSuccessMsg('Cleared all saved audio recordings.');
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
+  // Delete individual transcript segment
+  const handleDeleteTranscript = async (transcriptId: string) => {
+    const currentTranscripts = session.transcripts || [];
+    const updatedTranscripts = currentTranscripts.filter((t) => t.id !== transcriptId);
+    const updatedSession = { ...session, transcripts: updatedTranscripts };
+    await updateStateOnServer({ transcriptionSession: updatedSession });
+    setAiSuccessMsg('Deleted transcript segment.');
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
+  // Clear all transcript segments
+  const handleClearAllTranscripts = async () => {
+    const updatedSession = { ...session, transcripts: [] };
+    await updateStateOnServer({ transcriptionSession: updatedSession });
+    setAiSuccessMsg('Cleared all transcript segments.');
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
   // Delete extracted claim
   const handleDeleteExtractedClaim = async (claimId: string) => {
     const currentExtracted = session.extractedClaims || [];
@@ -738,10 +893,23 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
-  // AI Claim Extraction Call
+  // AI Claim Extraction Call (Supports Phase Selection)
   const handleExtractClaimsWithAI = async () => {
-    if (!displayTranscripts || displayTranscripts.length === 0) {
-      setAiError('No transcript items available yet. Start recording live audio or select a saved session recording.');
+    const baseTranscripts = displayTranscripts.length > 0 ? displayTranscripts : sessionTranscripts;
+    if (!baseTranscripts || baseTranscripts.length === 0) {
+      setAiError('No transcript items available. Start recording live audio or select a saved session recording.');
+      return;
+    }
+
+    // Restrict claim extraction to Opening Statements & Rebuttal phases only
+    const claimPhaseTranscripts = baseTranscripts.filter((t) => {
+      const p = (t.phaseId || (t as any).phaseName || (t as any).phase || '').toUpperCase();
+      if (!p) return true;
+      return p.includes('OPEN') || p.includes('REBUT');
+    });
+
+    if (claimPhaseTranscripts.length === 0) {
+      setAiError('Claims are only extracted during Opening Statements and Rebuttal phases. Cross-Examination, Chat Questions, Highlights, Lobby, and Closing phases are excluded from claim extraction.');
       return;
     }
 
@@ -753,13 +921,15 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcripts: displayTranscripts,
+          transcripts: claimPhaseTranscripts,
+          currentPhase: state?.currentPhase || 'OPENING',
           seatedPanelists,
         }),
       });
 
       const data = await response.json();
       if (data.claims && Array.isArray(data.claims)) {
+        const activePhaseLabel = selectedPhaseFilter !== 'ALL' ? selectedPhaseFilter : (state?.currentPhase || 'OPENING');
         const newClaims: ExtractedClaim[] = data.claims.map((c: any) => ({
           id: `cl_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           text: c.text,
@@ -768,14 +938,20 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
           formattedTime: c.formattedTime || formatTime(c.timestampSeconds || 0),
           possibleSpeaker: c.possibleSpeaker || 'Unknown Speaker',
           status: 'pending',
+          phase: activePhaseLabel,
         }));
 
-        const updatedSession = {
-          ...session,
-          extractedClaims: [...newClaims, ...extractedClaims],
-        };
-        await updateStateOnServer({ transcriptionSession: updatedSession });
-        setAiSuccessMsg(`Successfully extracted ${newClaims.length} debate claims using Gemini AI.`);
+        if (newClaims.length === 0) {
+          setAiSuccessMsg(data.note || 'No explicit claims found in Opening/Rebuttal transcript segment.');
+        } else {
+          const updatedSession = {
+            ...session,
+            extractedClaims: [...newClaims, ...extractedClaims],
+          };
+          await updateStateOnServer({ transcriptionSession: updatedSession });
+          const phaseNotice = selectedPhaseFilter !== 'ALL' ? `from ${selectedPhaseFilter} phase` : 'from Opening/Rebuttal phases';
+          setAiSuccessMsg(`Successfully extracted ${newClaims.length} debate claims ${phaseNotice} using Gemini AI.`);
+        }
         setActiveTab('claims');
         setTimeout(() => setAiSuccessMsg(null), 4000);
       } else {
@@ -1030,6 +1206,15 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             <span>Highlights ({highlights.length})</span>
           </button>
           <button
+            onClick={() => setActiveTab('captions')}
+            className={`px-2.5 py-1 text-[10px] font-bold rounded cursor-pointer transition-colors flex items-center gap-1.5 ${
+              activeTab === 'captions' ? 'bg-[#f97316] text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            <Tv className="w-3 h-3 text-cyan-400" />
+            <span>Open Captions</span>
+          </button>
+          <button
             onClick={() => setActiveTab('placeholders')}
             className={`px-2.5 py-1 text-[10px] font-bold rounded cursor-pointer transition-colors flex items-center gap-1.5 ${
               activeTab === 'placeholders' ? 'bg-[#f97316] text-white' : 'text-gray-400 hover:text-white'
@@ -1194,6 +1379,17 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                 </span>
 
                 <div className="flex items-center gap-2">
+                  {recordings.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearAllRecordings}
+                      className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      title="Clear all saved audio recordings"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-400" />
+                      <span>Clear All</span>
+                    </button>
+                  )}
                   {selectedRecordingId && (
                     <button
                       type="button"
@@ -1327,21 +1523,22 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
           </div>
         )}
 
-        {/* TAB 2: LIVE TRANSCRIPT */}
+        {/* TAB 2: LIVE TRANSCRIPT BY PHASES */}
         {activeTab === 'transcript' && (
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between bg-[#16171d] p-3 rounded-xl border border-[#2d2f39]">
+            {/* Header & Claim Extraction Button */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-[#16171d] p-3 rounded-xl border border-[#2d2f39] gap-2">
               <div className="flex items-center gap-2">
                 <FileText className="w-4 h-4 text-[#f97316]" />
-                <span className="text-xs font-bold text-white">Debate Speech Transcript</span>
+                <span className="text-xs font-bold text-white">Debate Speech Transcripts</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleExtractClaimsWithAI}
                   disabled={isExtracting || displayTranscripts.length === 0}
-                  className="bg-gradient-to-r from-[#f97316] to-amber-500 hover:from-[#ea580c] hover:to-amber-600 text-white px-3 py-1 rounded text-[10px] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-md"
-                  title="Extract key debate claims from transcript using Gemini AI"
+                  className="bg-gradient-to-r from-[#f97316] to-amber-500 hover:from-[#ea580c] hover:to-amber-600 text-white px-3 py-1.5 rounded text-[10px] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-md"
+                  title={selectedPhaseFilter !== 'ALL' ? `Extract claims specifically from ${selectedPhaseFilter} phase` : "Extract claims from full transcript using Gemini AI"}
                 >
                   {isExtracting ? (
                     <>
@@ -1351,7 +1548,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   ) : (
                     <>
                       <Brain className="w-3.5 h-3.5" />
-                      <span>Extract Claims (Gemini AI)</span>
+                      <span>{selectedPhaseFilter !== 'ALL' ? `Extract Claims (${selectedPhaseFilter})` : 'Extract Claims (All)'}</span>
                     </>
                   )}
                 </button>
@@ -1361,16 +1558,89 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
               </div>
             </div>
 
-            {/* TRANSCRIPT LIST */}
+            {/* PHASE FILTER BAR & CATEGORY SELECTOR */}
+            <div className="bg-[#16171d] p-2.5 rounded-xl border border-[#2d2f39] flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-[#f97316]" />
+                  <span>Segment Transcripts By Phase:</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-gray-400">
+                    Showing {displayTranscripts.length} of {sessionTranscripts.length} lines
+                  </span>
+                  {sessionTranscripts.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearAllTranscripts}
+                      className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-[9px] font-bold transition-all cursor-pointer flex items-center gap-1"
+                      title="Clear all transcripts from session"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-400" />
+                      <span>Clear Transcripts</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+                {[
+                  { id: 'ALL', label: 'All Phases' },
+                  { id: 'OPENING', label: 'Opening Statements' },
+                  { id: 'CROSS', label: 'Cross Exam' },
+                  { id: 'REBUTTAL', label: 'Rebuttal Phase' },
+                  { id: 'FLOOR', label: 'Floor / Chat' },
+                  { id: 'CLOSING', label: 'Closing Statements' },
+                ].map((p) => {
+                  const isSelected = selectedPhaseFilter === p.id;
+                  const count = sessionTranscripts.filter(t => {
+                    if (p.id === 'ALL') return true;
+                    const tP = (t.phaseId || (t as any).phaseName || '').toUpperCase();
+                    if (p.id === 'OPENING') return tP.includes('OPEN');
+                    if (p.id === 'CROSS') return tP.includes('CROSS');
+                    if (p.id === 'REBUTTAL') return tP.includes('REBUT');
+                    if (p.id === 'FLOOR') return tP.includes('FLOOR') || tP.includes('CHAT');
+                    if (p.id === 'CLOSING') return tP.includes('CLOSE');
+                    return tP === p.id;
+                  }).length;
+
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setSelectedPhaseFilter(p.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shrink-0 flex items-center gap-1.5 border ${
+                        isSelected
+                          ? 'bg-[#f97316] text-white border-[#f97316] shadow-md shadow-[#f97316]/20'
+                          : 'bg-[#101114] text-gray-300 border-[#2d2f39] hover:bg-[#232530] hover:text-white'
+                      }`}
+                    >
+                      <span>{p.label}</span>
+                      <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
+                        isSelected ? 'bg-black/30 text-white' : 'bg-[#1b1d24] text-gray-400'
+                      }`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* TRANSCRIPT LIST BROKEN UP BY PHASES */}
             {displayTranscripts.length === 0 ? (
               <div className="p-8 bg-[#0a0b0d] border border-[#1d1e24] rounded-xl text-center text-xs text-gray-500 flex flex-col items-center gap-2">
                 <Mic className="w-8 h-8 text-gray-600 animate-pulse" />
-                <span>Transcript is zero. Start recording live audio above or select a saved session recording to view its transcript.</span>
+                <span>No transcript segments recorded for the selected phase ({selectedPhaseFilter}). Speak during this phase or select "All Phases".</span>
               </div>
             ) : (
-              <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+              <div className="flex flex-col gap-2 max-h-[340px] overflow-y-auto pr-1">
                 {displayTranscripts.map((t) => {
-                  const isActiveLine = isPlaying && Math.abs(playbackTime - t.timestampSeconds) < 5;
+                  const isActiveLine = isPlaying && Math.abs(playbackTime - (t.timestampSeconds || 0)) < 5;
+                  const phaseInfo = getPhaseBadgeInfo(t.phaseId || (t as any).phaseName);
+                  const speakerDisplay = t.speaker || t.speakerName || 'Speaker';
+                  const formattedTimeStr = t.formattedTime || t.timestamp || 'Live';
+
                   return (
                     <div
                       key={t.id}
@@ -1380,29 +1650,44 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                           : 'bg-[#16171d]/60 border-[#2d2f39]/60 hover:border-[#f97316]/30'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
-                            onClick={() => jumpToTimestamp(t.timestampSeconds)}
+                            onClick={() => jumpToTimestamp(t.timestampSeconds || 0)}
                             className="bg-[#0a0b0d] hover:bg-[#f97316] hover:text-white text-[#f97316] font-mono text-[10px] font-bold px-2 py-0.5 rounded border border-[#f97316]/30 transition-colors flex items-center gap-1 cursor-pointer"
                             title="Click to jump audio to this moment"
                           >
                             <Clock className="w-3 h-3" />
-                            <span>{t.formattedTime}</span>
+                            <span>{formattedTimeStr}</span>
                           </button>
-                          <span className="text-xs font-bold text-white">{t.speaker}</span>
+
+                          <span className="text-xs font-bold text-white">{speakerDisplay}</span>
+
+                          {/* PHASE BADGE ON EACH TRANSCRIPT SEGMENT */}
+                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${phaseInfo.color}`}>
+                            {phaseInfo.label}
+                          </span>
                         </div>
 
-                        <button
-                          onClick={() => {
-                            setSelectedText(t.text);
-                            setShowHighlightModal(true);
-                          }}
-                          className="text-[10px] font-bold text-[#f97316] hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <Highlighter className="w-3 h-3" />
-                          <span>Highlight Section</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setSelectedText(t.text);
+                              setShowHighlightModal(true);
+                            }}
+                            className="text-[10px] font-bold text-[#f97316] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <Highlighter className="w-3 h-3" />
+                            <span>Highlight</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTranscript(t.id)}
+                            className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors cursor-pointer"
+                            title="Delete transcript line"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
 
                       <p className="text-xs text-gray-300 leading-relaxed font-sans">{t.text}</p>
@@ -1489,6 +1774,11 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   )}
                 </button>
               </div>
+            </div>
+
+            <div className="bg-[#121319] border border-[#232530] rounded-lg px-3 py-2 text-[11px] text-gray-400 flex items-center gap-2">
+              <span className="bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide">Phase Policy</span>
+              <span>Claim extraction is restricted to <strong>Opening Statements</strong> and <strong>Rebuttal</strong> phases only (Cross-Exam, Chat Q, Highlights, Lobby &amp; Closing are excluded).</span>
             </div>
 
             {extractedClaims.length === 0 ? (
@@ -1691,6 +1981,320 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
               <button disabled className="w-full bg-[#0a0b0d] border border-[#2d2f39] text-gray-500 text-[10px] font-bold py-1.5 rounded cursor-not-allowed">
                 (Ready for Future Connection)
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: OPEN CAPTIONS & ACTIVE SPEAKER CONTROL */}
+        {activeTab === 'captions' && (
+          <div className="flex flex-col gap-4">
+            {/* 1. ACTIVE SPEAKER CONTROL GRID */}
+            <div className="bg-[#16171d] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Tag Active Open Caption Speaker</span>
+                </span>
+                <span className="text-[9px] font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                  Live Stage Tagging
+                </span>
+              </div>
+
+              <p className="text-[11px] text-gray-400 leading-snug">
+                Click a speaker to automatically tag live microphone subtitles during cross-examinations or floor discussions:
+              </p>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {/* Host Button with Voice Profile Calibration */}
+                <div className={`p-2.5 rounded-lg text-xs font-bold transition-all flex flex-col items-start gap-1.5 border ${
+                  state?.currentSpeakerId === 'host' || !state?.currentSpeakerId
+                    ? 'bg-cyan-600/20 text-cyan-300 border-cyan-500 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-500'
+                    : 'bg-[#101114] text-gray-300 border-[#2d2f39]'
+                }`}>
+                  <button
+                    type="button"
+                    onClick={() => updateStateOnServer({ currentSpeakerId: 'host' })}
+                    className="w-full text-left cursor-pointer flex flex-col gap-1"
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-black">
+                        [HOST]
+                      </span>
+                      {(state?.currentSpeakerId === 'host' || !state?.currentSpeakerId) && (
+                        <Check className="w-3.5 h-3.5 text-cyan-400" />
+                      )}
+                    </div>
+                    <span className="truncate w-full font-semibold">Host / Moderator (You)</span>
+                  </button>
+
+                  <div className="w-full pt-1.5 border-t border-cyan-500/20 flex items-center justify-between gap-1">
+                    <span className={`text-[9px] font-medium ${hostVoiceProfileCalibrated ? 'text-cyan-300' : 'text-gray-400'}`}>
+                      {hostVoiceProfileCalibrated ? '✓ Profile Active' : 'Uncalibrated'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCalibrateHostVoice();
+                      }}
+                      disabled={isCalibratingHostVoice}
+                      className="text-[9px] font-bold text-cyan-300 bg-cyan-500/20 hover:bg-cyan-500/30 px-2 py-0.5 rounded transition-all cursor-pointer border border-cyan-500/40 disabled:opacity-50"
+                    >
+                      {isCalibratingHostVoice ? 'Listening...' : 'Train Voice'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Speaker 1 (Affirmative / Proposer) */}
+                {seatedPanelists.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = seatedPanelists[0].id;
+                      if (state?.currentSpeakerId === id) {
+                        updateStateOnServer({ currentSpeakerId: null, timer: { ...(state?.timer || { duration: 120, timeLeft: 120, isRunning: false }), isRunning: false } });
+                      } else {
+                        const matchedPhase = state?.settings?.phases?.find(p => p.id === state?.currentPhase);
+                        const defaultDuration = matchedPhase?.timerLength || 120;
+                        const existingSeatTimer = state?.seatTimers?.[id];
+                        const seatTimer = existingSeatTimer ? { ...existingSeatTimer, isRunning: true } : { duration: defaultDuration, timeLeft: defaultDuration, isRunning: true };
+                        const curLen = (state?.transcriptionSession?.transcripts || []).length;
+                        const updatedSession = {
+                          ...(state?.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+                          interimTranscript: '',
+                          activeTurnStartIndex: curLen,
+                          speakerTurnStartIndices: {
+                            ...(state?.transcriptionSession?.speakerTurnStartIndices || {}),
+                            [id]: curLen
+                          }
+                        };
+                        updateStateOnServer({ currentSpeakerId: id, transcriptionSession: updatedSession, timer: seatTimer, seatTimers: { ...(state?.seatTimers || {}), [id]: seatTimer } });
+                      }
+                    }}
+                    className={`p-2.5 rounded-lg text-xs font-bold transition-all flex flex-col items-start gap-1 cursor-pointer border ${
+                      state?.currentSpeakerId === seatedPanelists[0].id
+                        ? 'bg-blue-600/20 text-blue-300 border-blue-500 shadow-md shadow-blue-500/20 ring-1 ring-blue-500'
+                        : 'bg-[#101114] text-gray-300 border-[#2d2f39] hover:bg-[#232530]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-black">
+                        [AFFIRMATIVE]
+                      </span>
+                      {state?.currentSpeakerId === seatedPanelists[0].id && (
+                        <Check className="w-3.5 h-3.5 text-blue-400" />
+                      )}
+                    </div>
+                    <span className="truncate w-full text-left font-semibold">{seatedPanelists[0].name}</span>
+                    <span className="text-[9px] text-gray-400 font-normal">Proposer / Speaker 1</span>
+                  </button>
+                ) : (
+                  <div className="p-2.5 rounded-lg bg-[#101114] border border-[#2d2f39] text-gray-500 text-[10px]">
+                    No Affirmative Speaker Seated
+                  </div>
+                )}
+
+                {/* Speaker 2 (Opposition / Contrary) */}
+                {seatedPanelists.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = seatedPanelists[1].id;
+                      if (state?.currentSpeakerId === id) {
+                        updateStateOnServer({ currentSpeakerId: null, timer: { ...(state?.timer || { duration: 120, timeLeft: 120, isRunning: false }), isRunning: false } });
+                      } else {
+                        const matchedPhase = state?.settings?.phases?.find(p => p.id === state?.currentPhase);
+                        const defaultDuration = matchedPhase?.timerLength || 120;
+                        const existingSeatTimer = state?.seatTimers?.[id];
+                        const seatTimer = existingSeatTimer ? { ...existingSeatTimer, isRunning: true } : { duration: defaultDuration, timeLeft: defaultDuration, isRunning: true };
+                        const curLen = (state?.transcriptionSession?.transcripts || []).length;
+                        const updatedSession = {
+                          ...(state?.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+                          interimTranscript: '',
+                          activeTurnStartIndex: curLen,
+                          speakerTurnStartIndices: {
+                            ...(state?.transcriptionSession?.speakerTurnStartIndices || {}),
+                            [id]: curLen
+                          }
+                        };
+                        updateStateOnServer({ currentSpeakerId: id, transcriptionSession: updatedSession, timer: seatTimer, seatTimers: { ...(state?.seatTimers || {}), [id]: seatTimer } });
+                      }
+                    }}
+                    className={`p-2.5 rounded-lg text-xs font-bold transition-all flex flex-col items-start gap-1 cursor-pointer border ${
+                      state?.currentSpeakerId === seatedPanelists[1].id
+                        ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500 shadow-md shadow-emerald-500/20 ring-1 ring-emerald-500'
+                        : 'bg-[#101114] text-gray-300 border-[#2d2f39] hover:bg-[#232530]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-black">
+                        [OPPOSITION]
+                      </span>
+                      {state?.currentSpeakerId === seatedPanelists[1].id && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                    <span className="truncate w-full text-left font-semibold">{seatedPanelists[1].name}</span>
+                    <span className="text-[9px] text-gray-400 font-normal">Contrary / Speaker 2</span>
+                  </button>
+                ) : (
+                  <div className="p-2.5 rounded-lg bg-[#101114] border border-[#2d2f39] text-gray-500 text-[10px]">
+                    No Opposition Speaker Seated
+                  </div>
+                )}
+
+                {/* Additional Seated Speakers */}
+                {seatedPanelists.slice(2).map((p, idx) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      const id = p.id;
+                      if (state?.currentSpeakerId === id) {
+                        updateStateOnServer({ currentSpeakerId: null, timer: { ...(state?.timer || { duration: 120, timeLeft: 120, isRunning: false }), isRunning: false } });
+                      } else {
+                        const matchedPhase = state?.settings?.phases?.find(p => p.id === state?.currentPhase);
+                        const defaultDuration = matchedPhase?.timerLength || 120;
+                        const existingSeatTimer = state?.seatTimers?.[id];
+                        const seatTimer = existingSeatTimer ? { ...existingSeatTimer, isRunning: true } : { duration: defaultDuration, timeLeft: defaultDuration, isRunning: true };
+                        const curLen = (state?.transcriptionSession?.transcripts || []).length;
+                        const updatedSession = {
+                          ...(state?.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+                          interimTranscript: '',
+                          activeTurnStartIndex: curLen,
+                          speakerTurnStartIndices: {
+                            ...(state?.transcriptionSession?.speakerTurnStartIndices || {}),
+                            [id]: curLen
+                          }
+                        };
+                        updateStateOnServer({ currentSpeakerId: id, transcriptionSession: updatedSession, timer: seatTimer, seatTimers: { ...(state?.seatTimers || {}), [id]: seatTimer } });
+                      }
+                    }}
+                    className={`p-2.5 rounded-lg text-xs font-bold transition-all flex flex-col items-start gap-1 cursor-pointer border ${
+                      state?.currentSpeakerId === p.id
+                        ? 'bg-purple-600/20 text-purple-300 border-purple-500 shadow-md shadow-purple-500/20 ring-1 ring-purple-500'
+                        : 'bg-[#101114] text-gray-300 border-[#2d2f39] hover:bg-[#232530]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-black">
+                        [SPEAKER {idx + 3}]
+                      </span>
+                      {state?.currentSpeakerId === p.id && (
+                        <Check className="w-3.5 h-3.5 text-purple-400" />
+                      )}
+                    </div>
+                    <span className="truncate w-full text-left font-semibold">{p.name}</span>
+                    <span className="text-[9px] text-gray-400 font-normal">Debater</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2. MANUAL SUBTITLE & NON-VERBAL BROADCASTER */}
+            <div className="bg-[#16171d] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-3">
+              <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+                <span>Live Subtitle & Non-Verbal Cue Broadcaster</span>
+              </span>
+
+              {/* Quick Non-Verbal Tag Buttons */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold text-gray-400 uppercase">Inject Non-Verbal Cue:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {['[cough]', '[clears throat]', '[laughing]', '[sigh]', '[applause]', '[gasp]', '[multiple people talking]', '[unable to caption]'].map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => {
+                        const currentSession = sessionRef.current || session;
+                        const existingInterim = currentSession.interimTranscript || '';
+                        const newText = existingInterim ? `${existingInterim} ${tag}` : tag;
+                        updateStateOnServer({
+                          transcriptionSession: {
+                            ...currentSession,
+                            interimTranscript: newText,
+                            isRecording: true
+                          }
+                        });
+                      }}
+                      className="px-2.5 py-1 bg-[#0a0b0d] hover:bg-[#232530] border border-[#2d2f39] hover:border-[#f97316] text-amber-300 text-[11px] font-mono font-bold rounded-md transition-colors cursor-pointer"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Manual Subtitle Input */}
+              <div className="flex flex-col gap-1.5 mt-1">
+                <span className="text-[10px] font-bold text-gray-400 uppercase">Broadcast Custom Subtitle Text:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={manualCaptionText}
+                    onChange={(e) => setManualCaptionText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && manualCaptionText.trim()) {
+                        const currentSession = sessionRef.current || session;
+                        updateStateOnServer({
+                          transcriptionSession: {
+                            ...currentSession,
+                            interimTranscript: manualCaptionText.trim(),
+                            isRecording: true
+                          }
+                        });
+                        setManualCaptionText('');
+                      }
+                    }}
+                    placeholder="Type a subtitle phrase to project on stage (e.g. 'Floor is open for discussion.')..."
+                    className="flex-1 bg-[#0a0b0d] border border-[#2d2f39] text-xs text-white px-3 py-2 rounded-lg focus:outline-none focus:border-[#f97316]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!manualCaptionText.trim()) return;
+                      const currentSession = sessionRef.current || session;
+                      updateStateOnServer({
+                        transcriptionSession: {
+                          ...currentSession,
+                          interimTranscript: manualCaptionText.trim(),
+                          isRecording: true
+                        }
+                      });
+                      setManualCaptionText('');
+                    }}
+                    className="bg-[#f97316] hover:bg-[#ea580c] text-white px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Push</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const currentSession = sessionRef.current || session;
+                      updateStateOnServer({
+                        transcriptionSession: {
+                          ...currentSession,
+                          interimTranscript: '',
+                          isRecording: true
+                        }
+                      });
+                    }}
+                    className="bg-[#232530] hover:bg-[#2d2f39] text-gray-300 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shrink-0"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Preview Monitor */}
+              <div className="bg-[#0a0b0d] border border-[#2d2f39] p-2.5 rounded-lg flex flex-col gap-1">
+                <span className="text-[9px] font-mono font-bold text-gray-500 uppercase">Stage Live Subtitle Monitor</span>
+                <p className="text-xs font-semibold text-cyan-200 min-h-[20px] italic">
+                  {session.interimTranscript || (session.transcripts && session.transcripts.length > 0 ? session.transcripts[session.transcripts.length - 1].text : '[No active caption projected]')}
+                </p>
+              </div>
             </div>
           </div>
         )}

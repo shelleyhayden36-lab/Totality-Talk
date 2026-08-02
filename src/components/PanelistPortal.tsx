@@ -619,6 +619,93 @@ export default function PanelistPortal({ state, onStateUpdate }: PanelistPortalP
           </div>
         )}
 
+        {/* Guidelines & AI Disclosure Notice Card */}
+        {myParticipant && (
+          <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-center justify-between gap-4 transition-all shadow-lg ${
+            myParticipant.agreedToDisclosure
+              ? 'bg-[#101114] border-emerald-500/30 shadow-emerald-950/20'
+              : 'bg-amber-950/20 border-amber-500/50 shadow-amber-950/30 animate-pulse'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-xl border ${
+                myParticipant.agreedToDisclosure
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+              }`}>
+                <FileText className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
+                  <span>Guidelines & AI Disclosure Notice</span>
+                  {myParticipant.agreedToDisclosure ? (
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 text-[9px] font-extrabold rounded-full border border-emerald-500/40">✓ Agreed</span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 text-[9px] font-extrabold rounded-full border border-amber-500/40">Action Required</span>
+                  )}
+                </h4>
+                <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+                  {myParticipant.agreedToDisclosure
+                    ? 'You have agreed to all debate guidelines and the AI assistance notice.'
+                    : 'Please review and confirm your consent to the debate ground rules and AI analysis before opening statements.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+              {!myParticipant.agreedToDisclosure ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = (state.participants || []).map(p => {
+                        if (p.id === myParticipant.id) {
+                          return { ...p, isSeated: false, agreedToDisclosure: false };
+                        }
+                        return p;
+                      });
+                      onStateUpdate({ participants: updated });
+                    }}
+                    className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                  >
+                    Decline & Leave Seat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = (state.participants || []).map(p => {
+                        if (p.id === myParticipant.id) {
+                          return { ...p, agreedToDisclosure: true };
+                        }
+                        return p;
+                      });
+                      onStateUpdate({ participants: updated });
+                    }}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-black font-black rounded-xl text-xs transition-all cursor-pointer shadow-md shadow-emerald-500/20"
+                  >
+                    I Agree to Disclosure
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = (state.participants || []).map(p => {
+                      if (p.id === myParticipant.id) {
+                        return { ...p, agreedToDisclosure: false };
+                      }
+                      return p;
+                    });
+                    onStateUpdate({ participants: updated });
+                  }}
+                  className="px-3 py-1.5 bg-[#16171d] hover:bg-[#20222b] border border-[#2d2f39] text-gray-400 hover:text-white text-[11px] font-bold rounded-lg transition-all cursor-pointer"
+                >
+                  Revoke Agreement
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Current Debate Topic Card */}
         <div className="bg-[#101114] border border-[#1d1e24] rounded-2xl p-5 relative overflow-hidden shrink-0">
           <div className="absolute top-0 left-0 w-1.5 h-full bg-[#f97316]"></div>

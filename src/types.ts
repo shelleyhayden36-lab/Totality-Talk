@@ -3,6 +3,8 @@ export interface Participant {
   name: string;
   role: 'PROPOSER' | 'CONTRARY';
   isSeated: boolean;
+  hasBeenSeated?: boolean;
+  agreedToDisclosure?: boolean;
   isMuted: boolean;
   isSpeakerOut?: boolean;
   score: number;
@@ -36,7 +38,13 @@ export interface TranscriptItem {
   timestampSeconds: number;
   formattedTime: string;
   speaker: string;
+  speakerName?: string;
+  timestamp?: string;
   text: string;
+  phaseId?: string;
+  phaseName?: string;
+  phase?: string;
+  round?: string;
   isHighlighted?: boolean;
 }
 
@@ -52,6 +60,7 @@ export interface ExtractedClaim {
   assignedSpeakerName?: string;
   status: 'pending' | 'assigned' | 'rejected';
   linkedAudioTimestamp?: number;
+  phase?: string;
 }
 
 export interface TranscriptHighlight {
@@ -73,4 +82,8 @@ export interface AudioTranscriptionSession {
   highlights: TranscriptHighlight[];
   selectedRecordingId?: string;
   sidebarCollapsed?: boolean;
+  interimTranscript?: string;
+  isRecording?: boolean;
+  activeTurnStartIndex?: number;
+  speakerTurnStartIndices?: Record<string, number>;
 }

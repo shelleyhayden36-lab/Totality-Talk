@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Sparkles, 
@@ -10,11 +10,16 @@ import {
   Zap, 
   Target, 
   Check,
-  ImageIcon
+  ImageIcon,
+  UserCheck,
+  Users,
+  Filter,
+  Mic
 } from 'lucide-react';
 import { DebateState, FormalClaim } from '../../App';
 import StageTimer from './StageTimer';
 import { HolographicProjectionCard } from './HolographicProjectionCard';
+import { getActivePhaseTranscripts } from '../../lib/transcriptUtils';
 
 interface LayoutProps {
   state: DebateState;
@@ -25,13 +30,38 @@ interface LayoutProps {
 export default function RebuttalLayout({ state, formatTime, onStateUpdate }: LayoutProps) {
   // Determine Phase & Rebutting Team
   const currentPhase = (state.currentPhase || 'REBUTTAL_OPPOSITION').toUpperCase();
-  const isOppRebuttal = currentPhase === 'REBUTTAL_OPPOSITION';
-  const isAffRebuttal = currentPhase === 'REBUTTAL_AFFIRMATIVE';
+  const isOppRebuttal = currentPhase === 'REBUTTAL_OPPOSITION' || state.rebuttalRebutterTeam === 'CONTRARY';
+  const isAffRebuttal = currentPhase === 'REBUTTAL_AFFIRMATIVE' || state.rebuttalRebutterTeam === 'PROPOSER';
+
+  // Active Speaker & Participants
+  const participants = state.participants || [];
+  const seatedParticipants = participants.filter(p => p.isSeated);
+  const activeSpeakerId = state.currentSpeakerId || null;
+  const activeSpeakerObj = participants.find(p => p.id === activeSpeakerId);
+
+  // Teleprompter ref and active speaker transcript tracking
+  const teleprompterRef = useRef<HTMLDivElement>(null);
+  const [isHoveringTeleprompter, setIsHoveringTeleprompter] = useState(false);
+
+  const currentTurnStartIndex = state.transcriptionSession?.speakerTurnStartIndices?.[activeSpeakerId || ''] ?? state.transcriptionSession?.activeTurnStartIndex ?? 0;
+  const allTranscripts = state.transcriptionSession?.transcripts || [];
+  const activeSpeakerTranscripts = allTranscripts.slice(currentTurnStartIndex);
+  const interimTranscript = state.transcriptionSession?.interimTranscript || '';
+
+  // Auto-scroll teleprompter
+  useEffect(() => {
+    if (teleprompterRef.current && !isHoveringTeleprompter) {
+      teleprompterRef.current.scrollTo({
+        top: teleprompterRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [activeSpeakerTranscripts.length, interimTranscript, isHoveringTeleprompter]);
 
   // Target claim ID from global state
   const targetClaimId = state.rebuttalTargetClaimId || null;
 
-  // Gather target claims pool
+  // Gather ALL target claims pool from formalClaims, claims, and extractedClaims
   const rawFormalClaims: FormalClaim[] = Array.isArray(state.formalClaims) ? state.formalClaims : [];
   
   const legacyClaims: FormalClaim[] = (Array.isArray(state.claims) ? state.claims : [])
@@ -42,7 +72,8 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
       team: c.speakerId?.includes('con') || c.speakerName?.toLowerCase().includes('opp') ? 'CONTRARY' : 'PROPOSER',
       phase: c.phase || 'OPENING',
       claimText: c.text,
-      status: 'approved'
+      status: 'approved',
+      visualImageUrl: (c as any).visualImageUrl || (c as any).imageUrl
     }));
 
   const aiExtractedClaims: FormalClaim[] = (Array.isArray(state.transcriptionSession?.extractedClaims) ? state.transcriptionSession.extractedClaims : [])
@@ -53,40 +84,27 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
       team: 'PROPOSER',
       phase: 'OPENING',
       claimText: c.text,
-      status: 'approved'
+      status: 'approved',
+      visualImageUrl: (c as any).visualImageUrl || (c as any).imageUrl
     }));
 
-  const allClaimsPool = rawFormalClaims.length > 0 
-    ? rawFormalClaims 
-    : legacyClaims.length > 0 
-      ? legacyClaims 
-      : aiExtractedClaims;
-
-  const opposingApprovedClaims = allClaimsPool.filter(c => {
-    const cTeam = (c.team || '').toUpperCase();
-    const isProposer = cTeam === 'PROPOSER' || cTeam === 'AFFIRMATIVE' || cTeam.includes('PRO') || cTeam.includes('AFF');
-    const isContrary = cTeam === 'CONTRARY' || cTeam === 'OPPOSITION' || cTeam.includes('CON') || cTeam.includes('OPP');
-
-    if (isOppRebuttal) return isProposer || !isContrary;
-    if (isAffRebuttal) return isContrary || !isProposer;
-    return true;
-  });
-
-  const availableTargetClaims = opposingApprovedClaims.length > 0 ? opposingApprovedClaims : allClaimsPool;
-
-  // Helper to retrieve generated image URL for a claim
+  // Helper to retrieve generated image URL for a claim across all state collections
   const getClaimImageUrl = (claim: FormalClaim | undefined): string | null => {
     if (!claim) return null;
     
+    // 1. Direct URL on claim
     const directUrl = (claim as any).visualImageUrl || (claim as any).imageUrl;
     if (directUrl) return directUrl;
 
+    const normText = (claim.claimText || '').trim().toLowerCase();
+
+    // 2. Search by EXACT ID match FIRST (highest priority)
     const fc = (state.formalClaims || []).find(f => f.claimId === claim.claimId || (f as any).id === claim.claimId);
     if (fc && ((fc as any).visualImageUrl || (fc as any).imageUrl)) {
       return (fc as any).visualImageUrl || (fc as any).imageUrl;
     }
 
-    const lc = (state.claims || []).find(c => c.id === claim.claimId || c.id === (claim as any).id);
+    const lc = (state.claims || []).find(c => c.id === claim.claimId || (c as any).claimId === claim.claimId);
     if (lc && ((lc as any).visualImageUrl || (lc as any).imageUrl)) {
       return (lc as any).visualImageUrl || (lc as any).imageUrl;
     }
@@ -96,67 +114,137 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
       return ec.visualImageUrl || ec.imageUrl;
     }
 
+    const slide = [...((state as any).slides || []), ...((state as any).highlightSlides || [])].find((s: any) => s.claimId === claim.claimId || s.id === claim.claimId);
+    if (slide && ((slide as any).visualImageUrl || (slide as any).imageUrl)) {
+      return (slide as any).visualImageUrl || (slide as any).imageUrl;
+    }
+
+    // 3. Search by exact text match ONLY if normText is substantial (>= 10 chars)
+    if (normText && normText.length >= 10) {
+      const fcText = (state.formalClaims || []).find(f => f.claimText && f.claimText.trim().toLowerCase() === normText);
+      if (fcText && ((fcText as any).visualImageUrl || (fcText as any).imageUrl)) {
+        return (fcText as any).visualImageUrl || (fcText as any).imageUrl;
+      }
+
+      const lcText = (state.claims || []).find(c => (c.text && c.text.trim().toLowerCase() === normText) || ((c as any).claimText && (c as any).claimText.trim().toLowerCase() === normText));
+      if (lcText && ((lcText as any).visualImageUrl || (lcText as any).imageUrl)) {
+        return (lcText as any).visualImageUrl || (lcText as any).imageUrl;
+      }
+    }
+
     return null;
   };
 
-  // State to track manual selection vs auto cycling
-  const [isManualSelection, setIsManualSelection] = useState<boolean>(false);
+  // Combine and deduplicate claims, ensuring images are attached
+  const combinedClaimsMap = new Map<string, FormalClaim & { visualImageUrl?: string }>();
+  [...rawFormalClaims, ...legacyClaims, ...aiExtractedClaims].forEach(c => {
+    if (c.claimId && c.claimText) {
+      const existing = combinedClaimsMap.get(c.claimId);
+      const img = (c as any).visualImageUrl || (c as any).imageUrl || getClaimImageUrl(c);
+      if (!existing) {
+        combinedClaimsMap.set(c.claimId, { ...c, visualImageUrl: img || undefined });
+      } else {
+        if (!existing.visualImageUrl && img) {
+          existing.visualImageUrl = img;
+        }
+      }
+    }
+  });
+  const allClaimsPool = Array.from(combinedClaimsMap.values());
+
+  // Claim filtering tab state
+  const [claimFilterTab, setClaimFilterTab] = useState<'OPPOSING' | 'AFFIRMATIVE' | 'ALL'>('OPPOSING');
+
+  const filteredTargetClaims = allClaimsPool.filter(c => {
+    if (claimFilterTab === 'ALL') return true;
+    const cTeam = (c.team || '').toUpperCase();
+    const isProposer = cTeam === 'PROPOSER' || cTeam === 'AFFIRMATIVE' || cTeam.includes('PRO') || cTeam.includes('AFF');
+    const isContrary = cTeam === 'CONTRARY' || cTeam === 'OPPOSITION' || cTeam.includes('CON') || cTeam.includes('OPP');
+
+    if (claimFilterTab === 'OPPOSING') {
+      if (isOppRebuttal) return isProposer || !isContrary;
+      if (isAffRebuttal) return isContrary || !isProposer;
+    }
+    if (claimFilterTab === 'AFFIRMATIVE') return isProposer;
+    return true;
+  });
+
+  const availableTargetClaims = filteredTargetClaims.length > 0 ? filteredTargetClaims : allClaimsPool;
+
+  // Handlers to update speaker or rebuttal team
+  const handleSelectSpeaker = (participantId: string) => {
+    if (!onStateUpdate) return;
+    const currentLen = (state.transcriptionSession?.transcripts || []).length;
+    const updatedSession = {
+      ...(state.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+      interimTranscript: '',
+      activeTurnStartIndex: currentLen,
+      speakerTurnStartIndices: {
+        ...(state.transcriptionSession?.speakerTurnStartIndices || {}),
+        [participantId]: currentLen
+      }
+    };
+    onStateUpdate({
+      currentSpeakerId: participantId,
+      transcriptionSession: updatedSession
+    });
+  };
+
+  const handleToggleRebuttalPhase = (newPhase: 'REBUTTAL_OPPOSITION' | 'REBUTTAL_AFFIRMATIVE') => {
+    if (!onStateUpdate) return;
+    onStateUpdate({
+      currentPhase: newPhase,
+      rebuttalRebutterTeam: newPhase === 'REBUTTAL_OPPOSITION' ? 'CONTRARY' : 'PROPOSER'
+    });
+  };
+
   const [activeClaimIndex, setActiveClaimIndex] = useState<number>(0);
 
-  // Sync active target claim
-  const activeTargetClaim: FormalClaim | undefined = isManualSelection
-    ? (availableTargetClaims.find(c => c.claimId === targetClaimId) || availableTargetClaims[activeClaimIndex] || availableTargetClaims[0])
-    : (availableTargetClaims[activeClaimIndex] || availableTargetClaims[0]);
+  // Is a claim targeted? (Driven strictly by global targetClaimId)
+  const targetedClaimFromState = targetClaimId ? allClaimsPool.find(c => c.claimId === targetClaimId) : null;
+  const isClaimTargeted = !!targetedClaimFromState;
 
-  // Auto-set targetClaimId if not set
-  useEffect(() => {
-    if (!targetClaimId && activeTargetClaim && onStateUpdate) {
-      onStateUpdate({ rebuttalTargetClaimId: activeTargetClaim.claimId });
-    }
-  }, [targetClaimId, activeTargetClaim, onStateUpdate]);
+  const currentCarouselIndex = availableTargetClaims.length > 0 
+    ? activeClaimIndex % availableTargetClaims.length 
+    : 0;
+
+  // Sync active target claim (if targeted, uses exact targeted claim; otherwise uses carousel index)
+  const activeTargetClaim: FormalClaim | undefined = targetedClaimFromState 
+    || availableTargetClaims[currentCarouselIndex] 
+    || availableTargetClaims[0];
 
   // Connected Evidences & Counterclaims for active target claim
   const connectedEvidences = (state.evidenceList || []).filter(e => e.claimId === activeTargetClaim?.claimId);
   const connectedCounterClaims = (state.counterClaims || []).filter(cc => cc.claimId === activeTargetClaim?.claimId);
 
-  // Active Image URL for the active claim
-  const activeClaimImageUrl = getClaimImageUrl(activeTargetClaim);
+  // Active Image URL for the active claim (checks active target claim first, then getClaimImageUrl fallback)
+  const activeClaimImageUrl = (activeTargetClaim as any)?.visualImageUrl 
+    || (activeTargetClaim as any)?.imageUrl 
+    || getClaimImageUrl(activeTargetClaim);
 
   // Stage display modes: 'image' (image/blueprint) | 'claim' (text) | 'counterclaim' | 'evidence'
   const [viewMode, setViewMode] = useState<'image' | 'claim' | 'counterclaim' | 'evidence'>('image');
-  const [autoRotate, setAutoRotate] = useState(true);
 
   // -------------------------------------------------------------
   // CYCLING & ROTATION LOGIC:
-  // 1. If NO claim manually selected:
-  //    - Autocycle through available claims every 12 seconds (10-15s per image/claim)
-  //    - Shows image + claim text, NO transcription panel underneath until selected
-  // 2. If a claim IS manually selected:
-  //    - Shows selected claim, actual words of the claim, image, and transcription underneath!
+  // 1. If NO claim targeted:
+  //    - Autocycle through available claims every 8 seconds
+  // 2. If a claim IS targeted:
+  //    - Shows split screen: Left Teleprompter + Right AI Claim Image
   // -------------------------------------------------------------
   useEffect(() => {
-    if (!autoRotate || availableTargetClaims.length === 0) return;
+    if (availableTargetClaims.length === 0) return;
 
     const interval = setInterval(() => {
-      if (isManualSelection) {
-        // Single claim selected mode: cycle between Image + transcription and Claim text focus view
-        setViewMode(prev => (prev === 'image' ? 'claim' : 'image'));
-      } else {
-        // Auto-cycle through all available target claims (12 seconds per image)
-        setActiveClaimIndex(prevIdx => {
-          const nextIdx = (prevIdx + 1) % availableTargetClaims.length;
-          const nextClaim = availableTargetClaims[nextIdx];
-          if (nextClaim && onStateUpdate) {
-            onStateUpdate({ rebuttalTargetClaimId: nextClaim.claimId });
-          }
-          return nextIdx;
-        });
+      if (!isClaimTargeted) {
+        // Auto-cycle through all available target claims (8 seconds per claim)
+        setActiveClaimIndex(prevIdx => (prevIdx + 1) % availableTargetClaims.length);
         setViewMode('image');
       }
-    }, 12000); // 12 seconds per claim image (10 to 15s requirement)
+    }, 8000); // 8 seconds hold time per claim image when untargeted
 
     return () => clearInterval(interval);
-  }, [autoRotate, isManualSelection, availableTargetClaims, onStateUpdate]);
+  }, [isClaimTargeted, availableTargetClaims.length]);
 
   // Color scheme based on target claim team
   const isTargetClaimAffirmative = activeTargetClaim?.team === 'PROPOSER' || isOppRebuttal;
@@ -210,8 +298,8 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
       <StageTimer state={state} formatTime={formatTime} isAffirmative={isAffRebuttal} />
 
       {/* HEADER BAR & BRANDING */}
-      <div className="flex flex-col shrink-0 z-10 mb-2">
-        <div className="flex items-center justify-between">
+      <div className="flex flex-col shrink-0 z-10 mb-2 gap-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           {/* TOTALITY TALK BRANDING BADGE */}
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center p-0.5 border border-cyan-400/60 shadow-[0_0_12px_rgba(0,242,255,0.4)]">
@@ -229,20 +317,43 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
             </div>
           </div>
 
-          {/* Mode Indicator Tag */}
-          <div className="flex items-center gap-2 pr-28 sm:pr-32">
-            <span className={`text-[10px] font-extrabold font-mono px-2.5 py-0.5 rounded-full border tracking-wider flex items-center gap-1.5 uppercase ${
-              isOppRebuttal
-                ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-            }`}>
-              <Zap className="w-3 h-3 animate-pulse" />
-              <span>REBUTTAL {isOppRebuttal ? 'OPPOSITION' : 'AFFIRMATIVE'}</span>
+          {/* Rebuttal Stage & Speaker Status Indicators (Clean Non-interactive Badges) */}
+          <div className="flex items-center gap-2 bg-[#090b10] border border-gray-800 p-1.5 rounded-xl pr-28 sm:pr-32 flex-wrap">
+            <span className="text-[9px] font-black uppercase tracking-wider text-gray-400 font-mono">
+              Rebuttal Stage:
             </span>
+            <div
+              className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border flex items-center gap-1.5 ${
+                isOppRebuttal
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/60 shadow-[0_0_12px_rgba(255,42,95,0.3)]'
+                  : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-[0_0_12px_rgba(0,242,255,0.3)]'
+              }`}
+            >
+              <Zap className={`w-3.5 h-3.5 ${isOppRebuttal ? 'text-rose-400' : 'text-cyan-400'}`} />
+              <span>{isOppRebuttal ? 'OPPOSITION REBUTTAL' : 'AFFIRMATIVE REBUTTAL'}</span>
+            </div>
+
+            {activeSpeakerObj && (
+              <div className="flex items-center gap-1.5 pl-2 border-l border-gray-800">
+                <span className="text-[9px] font-black uppercase tracking-wider text-gray-400 font-mono flex items-center gap-1">
+                  <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Speaking:</span>
+                </span>
+                <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase border flex items-center gap-1.5 ${
+                  activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER'
+                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50'
+                    : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER' ? 'bg-cyan-300' : 'bg-rose-300'}`} />
+                  <span>@{activeSpeakerObj.name}</span>
+                  <span className="text-[8px] opacity-75">({activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER' ? 'AFF' : 'OPP'})</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="w-full border-b border-gray-800/80 mt-2" />
+        <div className="w-full border-b border-gray-800/80 mt-1" />
       </div>
 
       {/* MAIN CYBER STAGE CHAMBER */}
@@ -257,332 +368,196 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
         </div>
 
         {/* CENTER FLOATING STAGE DISPLAY CONTAINER */}
-        <div className="w-full max-w-2xl flex-1 flex flex-col items-center justify-center my-auto z-10 min-h-0 py-1 overflow-hidden scrollbar-none">
+        <div className="w-full max-w-5xl flex-1 flex flex-col items-center justify-center my-auto z-10 min-h-0 py-1 overflow-hidden scrollbar-none">
           <AnimatePresence mode="wait">
             
             {/* ------------------------------------------------------------- */}
-            {/* MODE A: IMAGE / HOLOGRAPHIC PROJECTION VIEW WITH COUNTERCLAIM UNDERNEATH */}
+            {/* TARGETED CLAIM REBUTTAL VIEW (SPLIT: LEFT TELEPROMPTER | RIGHT IMAGE) */}
             {/* ------------------------------------------------------------- */}
-            {(viewMode === 'image' || viewMode === 'counterclaim') && activeTargetClaim && (
+            {isClaimTargeted && activeTargetClaim ? (
               <motion.div
-                key={`image-${activeTargetClaim.claimId}`}
+                key={`targeted-rebuttal-${activeTargetClaim.claimId}`}
                 variants={cyberVariants}
                 initial="initial"
                 animate="animate"
                 exit="exit"
-                className="w-full flex flex-col items-center gap-2 my-auto"
+                className="w-full flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch my-auto min-h-0 p-1 overflow-hidden"
               >
-                {/* Visual Status Indicator Badge */}
-                {isManualSelection ? (
-                  <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/60 shadow-[0_0_15px_rgba(245,158,11,0.4)] text-[10px] font-black uppercase text-amber-300 tracking-wider">
-                    <Target className="w-3.5 h-3.5 text-amber-300" />
-                    <span>SELECTED REBUTTAL TARGET CLAIM</span>
-                  </div>
-                ) : activeClaimImageUrl ? (
-                  <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-400/60 shadow-[0_0_15px_rgba(0,242,255,0.4)] text-[10px] font-black uppercase text-cyan-300 tracking-wider">
-                    <Sparkles className="w-3.5 h-3.5 text-cyan-300 animate-spin" style={{ animationDuration: '6s' }} />
-                    <span>AI GENERATED CLAIM IMAGE PROJECTION</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-900/80 border border-cyan-500/30 text-[10px] font-black uppercase text-cyan-400 tracking-wider">
-                    <Sparkles className="w-3 h-3 text-cyan-400" />
-                    <span>HOLOGRAPHIC BLUEPRINT SCHEMATIC</span>
-                  </div>
-                )}
-
-                {/* FLOATING 3D SCHEMATIC / GENERATED IMAGE CARD */}
-                <div className="w-full max-w-sm sm:max-w-md h-[160px] sm:h-[190px] shrink-0 my-0.5">
-                  <HolographicProjectionCard
-                    imageUrl={activeClaimImageUrl}
-                    claimText={activeTargetClaim.claimText}
-                    speakerName={activeTargetClaim.speaker}
-                    team={activeTargetClaim.team}
-                    type="claim"
-                    showExpandButton={true}
-                    className="w-full h-full shadow-2xl"
-                  />
-                </div>
-
-                {/* Actual Words of the Claim */}
-                <div className={`flex flex-col items-center justify-center px-4 py-2 rounded-xl text-center max-w-lg w-full ${
-                  isManualSelection ? 'bg-[#07090e]/95 border border-amber-500/50 shadow-lg' : 'bg-[#07090e]/90 border border-gray-800'
-                }`}>
-                  <span className={`text-[10px] uppercase font-mono tracking-wider font-extrabold mb-0.5 ${
-                    isManualSelection ? 'text-amber-400' : 'text-gray-400'
-                  }`}>
-                    {isManualSelection ? '🎯 SELECTED REBUTTAL TARGET WORDS:' : 'TARGET CLAIM WORDS:'}
-                  </span>
-                  <p className="text-xs sm:text-sm font-bold text-white leading-snug">
-                    <strong className={primaryTextClass}>[{activeTargetClaim.speaker}]: </strong>
-                    "{activeTargetClaim.claimText}"
-                  </p>
-                </div>
-
-                {/* TRANSCRIBING ROLE & COUNTERCLAIM PANEL - ONLY SHOWN ONCE A CLAIM IS SELECTED */}
-                {isManualSelection && (
-                  <div className={`w-full max-w-lg ${
-                    isAffRebuttal 
-                      ? 'bg-[#040f1a]/95 border border-cyan-500/50 shadow-[0_0_20px_rgba(0,242,255,0.25)]'
-                      : 'bg-[#1a040a]/95 border border-rose-500/50 shadow-[0_0_20px_rgba(255,42,95,0.25)]'
-                  } rounded-xl p-2.5 text-left relative overflow-hidden backdrop-blur-md`}>
-                    <div className="flex items-center justify-between border-b border-gray-800/80 pb-1 mb-1">
-                      <div className="flex items-center gap-1.5">
-                        <MessageSquare className={`w-3.5 h-3.5 ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'} animate-pulse`} />
-                        <span className={`text-[10px] font-black tracking-widest uppercase font-mono ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'}`}>
-                          TRANSCRIBING REBUTTAL ROLE & COUNTERCLAIM
-                        </span>
-                      </div>
-
-                      <span className={`text-[9px] font-extrabold font-mono px-2 py-0.5 rounded-full border uppercase tracking-wider ${
-                        isAffRebuttal 
-                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50' 
-                          : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
-                      }`}>
-                        ⚔️ REBUTTAL
-                      </span>
-                    </div>
-
-                    {connectedCounterClaims.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] font-black text-gray-400 uppercase">
-                            VOICED BY: <strong className="text-white">{activeCounterClaim?.rebutterId || 'Rebuttal Speaker'}</strong>
-                          </span>
-                          <span className="text-[9px] font-mono text-gray-400">
-                            {connectedCounterClaims.length} Rebuttal Point{connectedCounterClaims.length > 1 ? 's' : ''}
-                          </span>
-                        </div>
-                        <p className="text-xs font-bold text-white leading-relaxed bg-[#020b14]/80 p-2 rounded-lg border border-cyan-500/30 italic truncate">
-                          "{activeCounterClaim?.counterText}"
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-1 py-1 px-2.5 bg-slate-900/60 rounded-lg border border-gray-800 text-xs text-gray-400">
-                        {(state?.transcriptionSession?.interimTranscript || (state?.transcriptionSession?.transcripts && state.transcriptionSession.transcripts.length > 0)) ? (
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[9px] font-mono font-black uppercase text-cyan-400 flex items-center gap-1">
-                              <Sparkles className="w-3 h-3 animate-spin" style={{ animationDuration: '4s' }} />
-                              LIVE TRANSCRIPTION:
-                            </span>
-                            <p className="text-xs font-bold text-white italic leading-snug">
-                              "{state?.transcriptionSession?.interimTranscript || state?.transcriptionSession?.transcripts[state.transcriptionSession.transcripts.length - 1]?.text}"
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <Brain className="w-4 h-4 text-cyan-400 animate-pulse shrink-0" />
-                            <span className="text-[11px]">Transcribing live rebuttal audio... Extracting counterclaims targeting this claim.</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </motion.div>
-            )}
-
-            {/* ------------------------------------------------------------- */}
-            {/* MODE B: CLAIM TEXT CARD VIEW */}
-            {/* ------------------------------------------------------------- */}
-            {viewMode === 'claim' && activeTargetClaim && (
-              <motion.div
-                key={`claim-${activeTargetClaim.claimId}`}
-                variants={cyberVariants}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                className="w-full flex flex-col items-center gap-2 my-auto"
-              >
-                {/* CLAIM BOX */}
-                <div className={`w-full max-w-lg bg-[#07090e]/95 border-2 ${primaryBorderClass} ${primaryGlowClass} rounded-2xl p-4 text-center relative overflow-hidden backdrop-blur-md flex flex-col items-center`}>
-                  {/* High-Tech Corner HUD Brackets */}
-                  <div className="absolute top-1.5 left-1.5 w-3 h-3 border-t-2 border-l-2 border-white/60 pointer-events-none" />
-                  <div className="absolute top-1.5 right-1.5 w-3 h-3 border-t-2 border-r-2 border-white/60 pointer-events-none" />
-                  <div className="absolute bottom-1.5 left-1.5 w-3 h-3 border-b-2 border-l-2 border-white/60 pointer-events-none" />
-                  <div className="absolute bottom-1.5 right-1.5 w-3 h-3 border-b-2 border-r-2 border-white/60 pointer-events-none" />
-
-                  {/* Header Title Label */}
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-[10px] sm:text-xs font-black tracking-[0.2em] uppercase ${primaryTextClass}`}>
-                      {activeTargetClaim.team === 'PROPOSER' ? 'AFFIRMATIVE CLAIM' : 'OPPOSITION CLAIM'}
-                    </span>
-                    {activeClaimImageUrl && (
-                      <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-400/50 uppercase flex items-center gap-1">
-                        <ImageIcon className="w-2.5 h-2.5" />
-                        <span>IMAGE GENERATED</span>
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Main Display Claim Text (Scrollbar Hidden) */}
-                  <div className="max-h-[180px] overflow-y-auto scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] w-full px-2">
-                    <h2 className="text-base sm:text-xl font-black text-white tracking-tight leading-relaxed my-1">
-                      "{activeTargetClaim.claimText}"
-                    </h2>
-                  </div>
-
-                  {/* Speaker & Team Pill Badge */}
-                  <div className="mt-3 flex items-center justify-center shrink-0">
-                    <span className={`px-4 py-1 rounded-full border text-xs font-black uppercase tracking-wider flex items-center gap-2 ${
-                      activeTargetClaim.team === 'PROPOSER'
-                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50'
-                        : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
-                    }`}>
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>{activeTargetClaim.speaker}</span>
-                      <span className="text-gray-400 font-mono">//</span>
-                      <span>{activeTargetClaim.team === 'PROPOSER' ? 'Affirmative' : 'Opposition'}</span>
-                    </span>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ------------------------------------------------------------- */}
-            {/* MODE C: EVIDENCE LOG CARD */}
-            {/* ------------------------------------------------------------- */}
-            {viewMode === 'evidence' && activeTargetClaim && (
-              <motion.div
-                key={`evidence-${activeTargetClaim.claimId}`}
-                variants={cyberVariants}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                className="w-full flex flex-col items-center gap-3"
-              >
-                <div className="w-full max-w-lg bg-[#061410]/95 border-2 border-emerald-500/50 shadow-[0_0_35px_rgba(16,185,129,0.3)] rounded-2xl p-4 text-left relative overflow-hidden backdrop-blur-md">
-                  <div className="flex items-center justify-between border-b border-emerald-500/30 pb-2 mb-2.5">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center">
-                        <FileText className="w-3.5 h-3.5 text-emerald-300" />
-                      </div>
-                      <span className="text-xs font-black tracking-widest text-emerald-400 uppercase font-mono">
-                        EVIDENCE LOG
-                      </span>
-                    </div>
-
-                    <span className="text-[9px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 uppercase">
-                      VERIFIED EVIDENCE
-                    </span>
-                  </div>
-
-                  <div className="space-y-1 mb-3">
-                    <span className="text-[10px] font-black tracking-wider text-emerald-300 uppercase block">
-                      ARTICLE: {activeEvidence?.source || 'OBSERVING THE MOON FROM HOME'}
-                    </span>
-                    <p className="text-xs font-bold text-gray-200 leading-relaxed bg-[#020b08] p-2 rounded-lg border border-emerald-500/30 italic">
-                      "{activeEvidence?.evidenceText || activeTargetClaim.claimText}"
-                    </p>
-                  </div>
-
-                  <div className="bg-[#020d09] border border-emerald-500/40 rounded-xl p-2.5 text-center relative">
-                    <div className="grid grid-cols-5 gap-1 pt-1 text-center">
-                      <div className="flex flex-col items-center">
-                        <span className="text-[7.5px] font-bold text-gray-400 uppercase">PRESENTATION</span>
-                        <span className="text-sm font-black text-emerald-300 font-mono">9.5</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[7.5px] font-bold text-gray-400 uppercase">CLARITY</span>
-                        <span className="text-sm font-black text-emerald-300 font-mono">9.8</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[7.5px] font-bold text-gray-400 uppercase">RELEVANCE</span>
-                        <span className="text-sm font-black text-emerald-300 font-mono">9.6</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[7.5px] font-bold text-gray-400 uppercase">CREDIBILITY</span>
-                        <span className="text-sm font-black text-emerald-300 font-mono">10</span>
-                      </div>
-                      <div className="flex flex-col items-center bg-emerald-500/20 border border-emerald-400/40 rounded p-0.5">
-                        <span className="text-[7.5px] font-black text-emerald-300 uppercase">OVERALL</span>
-                        <span className="text-sm font-black text-white font-mono flex items-center gap-1">
-                          9.7 <Gavel className="w-3 h-3 text-emerald-300" />
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ------------------------------------------------------------- */}
-            {/* MODE D: COUNTERCLAIM REBUTTAL CARD */}
-            {/* ------------------------------------------------------------- */}
-            {viewMode === 'counterclaim' && activeTargetClaim && (
-              <motion.div
-                key={`counter-${activeTargetClaim.claimId}`}
-                variants={cyberVariants}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                className="w-full flex flex-col items-center gap-3"
-              >
-                <div className={`w-full max-w-lg ${
-                  isAffRebuttal 
-                    ? 'bg-[#040f1a]/95 border-2 border-cyan-500/60 shadow-[0_0_35px_rgba(0,242,255,0.4)]'
-                    : 'bg-[#1a040a]/95 border-2 border-rose-500/60 shadow-[0_0_35px_rgba(255,42,95,0.4)]'
-                } rounded-2xl p-4 text-left relative overflow-hidden backdrop-blur-md`}>
+                {/* LEFT SIDE: LIVE TELEPROMPTER */}
+                <div className="flex flex-col bg-[#050810]/95 border border-cyan-500/40 shadow-[0_0_25px_rgba(0,242,255,0.15)] rounded-2xl p-4 relative overflow-hidden backdrop-blur-md h-full min-h-[260px]">
                   
-                  <div className={`flex items-center justify-between border-b ${isAffRebuttal ? 'border-cyan-500/30' : 'border-rose-500/30'} pb-2 mb-2.5`}>
-                    <div className="flex items-center gap-2">
-                      <MessageSquare className={`w-4 h-4 ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'} animate-bounce`} />
-                      <span className={`text-xs font-black tracking-widest uppercase font-mono ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'}`}>
-                        {isAffRebuttal ? 'AFFIRMATIVE REBUTTAL COUNTERCLAIM' : 'OPPOSITION REBUTTAL COUNTERCLAIM'}
+                  {/* Teleprompter Header Bar */}
+                  <div className="z-10 pb-2.5 border-b border-gray-800 flex items-center justify-between text-xs font-mono shrink-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Mic className={`w-4 h-4 shrink-0 ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'} animate-pulse`} />
+                      <span className="text-gray-400 font-bold uppercase tracking-wider text-[10px] shrink-0">
+                        TELEPROMPTER:
+                      </span>
+                      <span className={`text-xs font-black uppercase tracking-wide truncate ${isAffRebuttal ? 'text-cyan-300' : 'text-rose-300'}`}>
+                        {activeSpeakerObj ? activeSpeakerObj.name : (isAffRebuttal ? 'Affirmative Rebutter' : 'Opposition Rebutter')}
                       </span>
                     </div>
-
-                    <span className={`text-[9px] font-extrabold font-mono px-2.5 py-0.5 rounded-full border uppercase tracking-wider ${
+                    <span className={`text-[9px] font-extrabold px-2.5 py-0.5 rounded-full border uppercase font-mono shrink-0 ${
                       isAffRebuttal 
                         ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50' 
                         : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
                     }`}>
-                      ⚔️ REBUTTAL ATTACK
+                      ⚔️ LIVE REBUTTAL
                     </span>
                   </div>
 
-                  {connectedCounterClaims.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-gray-400 flex flex-col items-center gap-2 italic">
-                      <Brain className="w-8 h-8 text-gray-500 animate-pulse" />
-                      <span>No counterclaims registered yet for this target claim.</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black text-gray-400 uppercase">
-                          VOICED BY: <strong className="text-white">{activeCounterClaim?.rebutterId || 'Rebuttal Speaker'}</strong>
-                        </span>
-                        <span className="text-[9px] font-mono text-gray-400">
-                          {connectedCounterClaims.length} Rebuttal Points
-                        </span>
+                  {/* Teleprompter Scrolling Text Area */}
+                  <div 
+                    ref={teleprompterRef}
+                    onMouseEnter={() => setIsHoveringTeleprompter(true)}
+                    onMouseLeave={() => setIsHoveringTeleprompter(false)}
+                    className="flex-1 overflow-y-auto scrollbar-none space-y-3 py-3 px-2 relative text-left flex flex-col justify-start min-h-0"
+                  >
+                    {activeSpeakerTranscripts.map((t: any, idx: number) => (
+                      <motion.p 
+                        key={t.id || idx} 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="text-sm sm:text-base font-semibold text-gray-100 leading-relaxed font-sans select-text"
+                      >
+                        {t.text}
+                      </motion.p>
+                    ))}
+
+                    {interimTranscript && (
+                      <motion.p 
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="text-sm sm:text-base font-bold text-cyan-300 italic leading-relaxed font-sans select-text animate-pulse"
+                      >
+                        "{interimTranscript}..."
+                      </motion.p>
+                    )}
+
+                    {activeSpeakerTranscripts.length === 0 && !interimTranscript && (
+                      <div className="flex-1 flex flex-col items-center justify-center py-6 text-center my-auto">
+                        <Brain className="w-7 h-7 text-cyan-400 animate-pulse mb-2" />
+                        <p className="text-xs font-bold text-white uppercase tracking-wider">Teleprompter Listening Live</p>
+                        <p className="text-[11px] text-gray-400 mt-1 max-w-xs leading-relaxed">
+                          Speech recognition active. Rebuttal transcriptions stream here live on stage.
+                        </p>
                       </div>
+                    )}
+                  </div>
 
-                      <blockquote className={`text-sm sm:text-base font-black text-white leading-relaxed p-3 rounded-xl border italic shadow-inner ${
-                        isAffRebuttal
-                          ? 'bg-[#020b14] border-cyan-500/40 text-cyan-100'
-                          : 'bg-[#120206] border-rose-500/40 text-rose-100'
-                      }`}>
-                        "{activeCounterClaim?.counterText}"
-                      </blockquote>
-                    </div>
-                  )}
+                  {/* Bottom Cinematic Fade */}
+                  <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-[#050810] to-transparent z-10 pointer-events-none" />
                 </div>
 
-                <div className={`w-full max-w-lg ${
-                  isAffRebuttal
-                    ? 'bg-[#040f1a]/90 border-2 border-cyan-500/60 shadow-[0_0_25px_rgba(0,242,255,0.3)]'
-                    : 'bg-[#1a040a]/90 border-2 border-rose-500/60 shadow-[0_0_25px_rgba(255,42,95,0.3)]'
-                } rounded-2xl p-3 text-center relative overflow-hidden backdrop-blur-md`}>
+                {/* RIGHT SIDE: CLAIM IMAGE & TARGET CLAIM STATEMENT */}
+                <div className="flex flex-col items-center justify-between bg-[#070a12]/95 border border-gray-800 rounded-2xl p-4 relative overflow-hidden backdrop-blur-md h-full min-h-[260px] gap-2.5">
                   
-                  <span className={`text-[10px] sm:text-xs font-black tracking-[0.25em] uppercase block mb-1 ${
-                    isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'
-                  }`}>
-                    {isAffRebuttal ? 'AFFIRMATIVE COUNTERCLAIM' : 'OPPOSITION COUNTERCLAIM'}
-                  </span>
+                  {/* Status Indicator Badge */}
+                  <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/60 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-[10px] font-black uppercase text-amber-300 tracking-wider shrink-0">
+                    <Target className="w-3.5 h-3.5 text-amber-300" />
+                    <span>TARGETED CLAIM UNDER REBUTTAL</span>
+                  </div>
 
-                  <h2 className="text-sm sm:text-base font-black text-white tracking-tight leading-snug px-2">
-                    REBUTTING TARGET: "{activeTargetClaim.claimText}"
-                  </h2>
+                  {/* Holographic Projection Card (NO selectable/expand buttons!) */}
+                  <div className="w-full flex-1 max-h-[210px] min-h-[140px] shrink-0 my-auto">
+                    <HolographicProjectionCard
+                      imageUrl={activeClaimImageUrl}
+                      claimText={activeTargetClaim.claimText}
+                      speakerName={activeTargetClaim.speaker}
+                      team={activeTargetClaim.team}
+                      type="claim"
+                      showExpandButton={false}
+                      className="w-full h-full shadow-2xl"
+                    />
+                  </div>
+
+                  {/* Target Claim Text Box */}
+                  <div className="w-full bg-[#030509]/95 border border-amber-500/40 p-3 rounded-xl text-center shrink-0">
+                    <span className="text-[9px] uppercase font-mono tracking-wider font-extrabold text-amber-400 block mb-0.5">
+                      TARGET CLAIM STATEMENT:
+                    </span>
+                    <p className="text-xs sm:text-sm font-bold text-white leading-snug">
+                      <strong className={primaryTextClass}>[{activeTargetClaim.speaker}]: </strong>
+                      "{activeTargetClaim.claimText}"
+                    </p>
+                  </div>
                 </div>
+
+              </motion.div>
+            ) : (
+
+              /* ------------------------------------------------------------- */
+              /* UNTARGETED REBUTTAL STAGE VIEW (NO CLAIM TARGETED YET) */
+              /* ------------------------------------------------------------- */
+              <motion.div
+                key={activeTargetClaim ? `untargeted-${activeTargetClaim.claimId}` : 'untargeted-none'}
+                variants={cyberVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                className="w-full flex flex-col items-center gap-2.5 my-auto max-w-xl"
+              >
+                {/* Visual Carousel Status Indicator Badge */}
+                <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-400/50 shadow-[0_0_15px_rgba(0,242,255,0.2)] text-[10px] font-black uppercase text-cyan-300 tracking-wider font-mono">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-300 animate-spin" style={{ animationDuration: '6s' }} />
+                  <span>
+                    AVAILABLE TARGET CLAIMS CAROUSEL ({availableTargetClaims.length > 0 ? currentCarouselIndex + 1 : 0} / {availableTargetClaims.length})
+                  </span>
+                </div>
+
+                {/* Subtitle / Mode Notice */}
+                <span className="text-[10px] text-gray-400 font-mono uppercase tracking-widest font-bold -mt-1">
+                  NO CLAIM TARGETED • ROTATING AVAILABLE CLAIMS TO REBUT
+                </span>
+
+                {/* FLOATING 3D SCHEMATIC / GENERATED IMAGE CARD */}
+                <div className="w-full max-w-sm sm:max-w-md h-[180px] sm:h-[210px] shrink-0 my-0.5">
+                  <HolographicProjectionCard
+                    imageUrl={activeClaimImageUrl}
+                    claimText={activeTargetClaim?.claimText || 'Debate Claim'}
+                    speakerName={activeTargetClaim?.speaker || 'Debater'}
+                    team={activeTargetClaim?.team}
+                    type="claim"
+                    showExpandButton={false}
+                    className="w-full h-full shadow-2xl"
+                  />
+                </div>
+
+                {/* Actual Words of the Available Claim */}
+                {activeTargetClaim ? (
+                  <div className="flex flex-col items-center justify-center px-4 py-2.5 bg-[#07090e]/90 border border-cyan-500/40 rounded-xl text-center max-w-lg w-full shadow-lg">
+                    <span className="text-[9px] uppercase font-mono tracking-wider font-extrabold text-cyan-400 mb-0.5">
+                      AVAILABLE CLAIM STATEMENT ({currentCarouselIndex + 1} OF {availableTargetClaims.length}):
+                    </span>
+                    <p className="text-xs sm:text-sm font-bold text-white leading-snug">
+                      <strong className={primaryTextClass}>[{activeTargetClaim.speaker}]: </strong>
+                      "{activeTargetClaim.claimText}"
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center px-4 py-3 bg-[#07090e]/90 border border-gray-800 rounded-xl text-center max-w-lg w-full">
+                    <span className="text-xs font-bold text-gray-500 italic">
+                      No claims available to target yet for this stage.
+                    </span>
+                  </div>
+                )}
+
+                {/* Carousel Pips / Indicators */}
+                {availableTargetClaims.length > 1 && (
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    {availableTargetClaims.map((c, i) => (
+                      <div
+                        key={c.claimId}
+                        className={`h-1.5 rounded-full transition-all ${
+                          i === currentCarouselIndex
+                            ? 'w-6 bg-cyan-400 shadow-[0_0_8px_rgba(0,242,255,0.8)]'
+                            : 'w-1.5 bg-gray-700'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -591,73 +566,6 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
 
         {/* Minimal floor accent line */}
         <div className="w-full max-w-lg h-0.5 bg-gradient-to-r from-transparent via-gray-700/50 to-transparent shrink-0 mt-1" />
-
-      </div>
-
-      {/* BOTTOM TARGET CLAIM SELECTOR & AUTO-CYCLE BAR (Clean, No Scrollbar) */}
-      <div className="pt-2 z-10 shrink-0 border-t border-gray-800/80 mt-1 flex items-center justify-between gap-2">
-        
-        {/* Quick Target Claims Selector Pills */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase shrink-0 flex items-center gap-1">
-            <Target className="w-3 h-3 text-cyan-400" />
-            <span>Target Claims:</span>
-          </span>
-
-          <div className="flex items-center gap-1.5 overflow-x-auto max-w-[85%] py-0.5 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none]">
-            {availableTargetClaims.map((claim, idx) => {
-              const isSelected = claim.claimId === activeTargetClaim?.claimId;
-              const hasImg = !!getClaimImageUrl(claim);
-
-              return (
-                <button
-                  key={claim.claimId}
-                  type="button"
-                  onClick={() => {
-                    setIsManualSelection(true);
-                    setActiveClaimIndex(idx);
-                    if (onStateUpdate) {
-                      onStateUpdate({ rebuttalTargetClaimId: claim.claimId });
-                    }
-                    setViewMode('image');
-                  }}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer shrink-0 flex items-center gap-1.5 border ${
-                    isSelected
-                      ? 'bg-cyan-500 text-white border-cyan-400 shadow-md scale-105'
-                      : 'bg-[#11131a] text-gray-400 border-[#222530] hover:text-white'
-                  }`}
-                >
-                  <span>[{claim.speaker}]</span>
-                  <span className="max-w-[120px] truncate">{claim.claimText}</span>
-                  {hasImg && (
-                    <span className="text-cyan-300 text-[10px]" title="Image Generated">
-                      🖼️
-                    </span>
-                  )}
-                  {isSelected && <Check className="w-3 h-3 text-white" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Cycle Toggle Button */}
-        <button
-          type="button"
-          onClick={() => {
-            setIsManualSelection(prev => !prev);
-            setAutoRotate(true);
-          }}
-          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer shrink-0 flex items-center gap-1 border ${
-            !isManualSelection
-              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50 shadow-[0_0_10px_rgba(0,242,255,0.2)]'
-              : 'bg-[#11131a] text-gray-400 border-[#222530] hover:text-white'
-          }`}
-          title={!isManualSelection ? 'Auto-cycling all target claims' : 'Click to auto-cycle all claims'}
-        >
-          <RotateCw className={`w-3 h-3 ${!isManualSelection ? 'animate-spin' : ''}`} style={{ animationDuration: '8s' }} />
-          <span>{!isManualSelection ? 'Auto Cycling' : 'Manual View'}</span>
-        </button>
 
       </div>
 

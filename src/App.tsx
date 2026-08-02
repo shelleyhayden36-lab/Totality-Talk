@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { playPenaltyBuzzerSound } from './utils/audio';
 import {
   Radio,
   Gavel,
@@ -20,6 +21,8 @@ import {
   X,
   Volume2,
   VolumeX,
+  AlertTriangle,
+  CheckCircle2,
   Square,
   ChevronRight,
   ChevronLeft,
@@ -28,6 +31,7 @@ import {
   ChevronDown,
   Clock,
   User,
+  UserX,
   Sliders,
   Sparkles,
   Star,
@@ -77,6 +81,8 @@ export interface Participant {
   name: string;
   role: 'PROPOSER' | 'CONTRARY';
   isSeated: boolean;
+  hasBeenSeated?: boolean;
+  agreedToDisclosure?: boolean;
   isMuted: boolean;
   isSpeakerOut?: boolean;
   score: number;
@@ -269,6 +275,7 @@ export interface SettingsState {
   themeColor: string;
   fontSize: 'small' | 'medium' | 'large';
   debateTopic: string;
+  lobbyImageUrl?: string;
   
   aiStatus: 'connected' | 'disconnected' | 'configuring';
   aiBotKeys: string[];
@@ -323,6 +330,18 @@ export interface Violation {
   ruleId: string;
   ruleName: string;
   pointsDeducted: number;
+}
+
+export interface ActiveViolationNotice {
+  id: string;
+  createdTime?: number;
+  participantId: string;
+  participantName: string;
+  participantRole: string;
+  ruleId: string;
+  ruleName: string;
+  ruleDescription?: string;
+  timestamp: string;
 }
 
 export interface WebhookLogEntry {
@@ -485,6 +504,7 @@ export interface DebateState {
   judgeBallots?: any[];
   rules?: DebateRule[];
   violations?: Violation[];
+  activeViolationNotice?: ActiveViolationNotice | null;
   chatVotes?: { pro: number; con: number };
   popularVotes?: { pro: number; con: number };
   scoringCalculations?: ScoringCalculations;
@@ -495,6 +515,7 @@ export interface DebateState {
   debateQueue?: DebateQueue;
   showOpeningStatementPopupForParticipantId?: string | null;
   openingStatementVideoPlayingForParticipantId?: string | null;
+  activeDisclosureParticipantId?: string | null;
   introVideoPlaying?: boolean;
   showPopularVoteWidget?: boolean;
   pendingJudgeApplications?: PendingJudgeApplication[];
@@ -506,6 +527,7 @@ export interface DebateState {
   seatHistory?: Array<{ team: 'PROPOSER' | 'CONTRARY'; seat: number; name: string; round?: string; timestamp: number }>;
   savedDebates?: any[];
   transcriptionSession?: any;
+  seatTimers?: Record<string, { duration: number; timeLeft: number; isRunning: boolean }>;
   floorText?: string;
   resetTimestamp?: number;
   lastUpdated?: number;
@@ -513,6 +535,12 @@ export interface DebateState {
 }
 
 export interface AISuggestedItem {
+  claim?: string;
+  evidenceType?: 'Direct Support' | 'Partial Support';
+  title?: string;
+  url?: string;
+  summary?: string;
+  verification?: string;
   text: string;
   source: string;
   status: 'pending' | 'accepted' | 'declined';
@@ -753,6 +781,13 @@ export default function App() {
     }
   }, [isArchivesView]);
 
+  // Keep panelistTopicInput in sync with active debate topic across host, judge, and panelist views
+  useEffect(() => {
+    if (state?.settings?.debateTopic !== undefined) {
+      setPanelistTopicInput(state.settings.debateTopic);
+    }
+  }, [state?.settings?.debateTopic]);
+
   const [bulkPromptsInput, setBulkPromptsInput] = useState('');
   const [editingPromptIndex, setEditingPromptIndex] = useState<number | null>(null);
   const [editingPromptValue, setEditingPromptValue] = useState('');
@@ -856,6 +891,7 @@ export default function App() {
   const [scoringWeights, setScoringWeights] = useState({ judgeScore: 60, penaltyCard: 20, chatVote: 10, popularVote: 10 });
   const [scoringEnabled, setScoringEnabled] = useState({ judgeScore: true, penaltyCard: true, chatVote: true, popularVote: true });
   const [scoringTestMode, setScoringTestMode] = useState(false);
+  const lastLoadedScoringJsonRef = useRef<string>('');
   
   const [testProJudge, setTestProJudge] = useState(8);
   const [testConJudge, setTestConJudge] = useState(7);
@@ -863,10 +899,11 @@ export default function App() {
   const [testConPenalty, setTestConPenalty] = useState(100);
   const [testProChat, setTestProChat] = useState(65);
   const [testConChat, setTestConChat] = useState(35);
-  const [testProPopular, setTestProPopular] = useState(3000);
-  const [testConPopular, setTestConPopular] = useState(2000);
+  const [testProPopular, setTestProPopular] = useState(0);
+  const [testConPopular, setTestConPopular] = useState(0);
 
   const [expandedChairId, setExpandedChairId] = useState<string | null>(null);
+  const [expandedPerspectives, setExpandedPerspectives] = useState<Record<string, boolean>>({});
   const [testSender, setTestSender] = useState('AudienceUser');
   const [testChatMsg, setTestChatMsg] = useState('!me Vote Pro');
 
@@ -936,6 +973,12 @@ export default function App() {
 
   useEffect(() => {
     if (state?.settings?.scoringSettings) {
+      const jsonStr = JSON.stringify(state.settings.scoringSettings);
+      if (lastLoadedScoringJsonRef.current === jsonStr) {
+        return;
+      }
+      lastLoadedScoringJsonRef.current = jsonStr;
+
       const s = state.settings.scoringSettings;
       setScoringWeights({
         judgeScore: s.judgeScore.weight,
@@ -965,6 +1008,26 @@ export default function App() {
 
   const [editingSpotKey, setEditingSpotKey] = useState<string | null>(null);
   const [editingSpotName, setEditingSpotName] = useState('');
+  const [disclosureWarningParticipant, setDisclosureWarningParticipant] = useState<Participant | null>(null);
+
+  const handleToggleDisclosureAgreed = (participantId: string) => {
+    if (!state) return;
+    const updatedParticipants = (state.participants || []).map(p => {
+      if (p.id === participantId) {
+        return { ...p, agreedToDisclosure: !p.agreedToDisclosure };
+      }
+      return p;
+    });
+    updateStateOnServer({ participants: updatedParticipants });
+  };
+
+  const handleTriggerDisclosureSpeech = (participantId: string) => {
+    if (!state) return;
+    const isCurrentlyActive = state.activeDisclosureParticipantId === participantId;
+    updateStateOnServer({
+      activeDisclosureParticipantId: isCurrentlyActive ? null : participantId
+    });
+  };
 
   const [selectedVideoRound, setSelectedVideoRound] = useState<Record<string, string>>({});
   const [isUploadingVideo, setIsUploadingVideo] = useState<Record<string, boolean>>({});
@@ -1047,6 +1110,7 @@ export default function App() {
       }
     };
 
+    lastLoadedScoringJsonRef.current = JSON.stringify(updatedScoring);
     updateSettings({ scoringSettings: updatedScoring });
   };
 
@@ -1054,6 +1118,42 @@ export default function App() {
     setScoringWeights({ judgeScore: 60, penaltyCard: 20, chatVote: 10, popularVote: 10 });
     setScoringEnabled({ judgeScore: true, penaltyCard: true, chatVote: true, popularVote: true });
     setScoringTestMode(false);
+  };
+
+  const handleAutoBalanceWeights = () => {
+    type WeightKey = 'judgeScore' | 'penaltyCard' | 'chatVote' | 'popularVote';
+    const keys: WeightKey[] = ['judgeScore', 'penaltyCard', 'chatVote', 'popularVote'];
+    const enabledKeys = keys.filter(k => scoringEnabled[k]);
+    if (enabledKeys.length === 0) return;
+
+    const currentSum = enabledKeys.reduce((acc, k) => acc + (Number(scoringWeights[k]) || 0), 0);
+    if (currentSum === 0) {
+      const even = Math.floor(100 / enabledKeys.length);
+      const rem = 100 - (even * enabledKeys.length);
+      const newWeights = { ...scoringWeights };
+      enabledKeys.forEach((k, idx) => {
+        newWeights[k] = even + (idx === 0 ? rem : 0);
+      });
+      setScoringWeights(newWeights);
+      return;
+    }
+
+    const rawScaled = enabledKeys.map(k => ({ key: k, val: (scoringWeights[k] / currentSum) * 100 }));
+    const rounded = rawScaled.map(item => ({ key: item.key, val: Math.round(item.val) }));
+    const roundedSum = rounded.reduce((acc, item) => acc + item.val, 0);
+    const diff = 100 - roundedSum;
+
+    const newWeights = { ...scoringWeights };
+    rounded.forEach(item => {
+      newWeights[item.key] = item.val;
+    });
+
+    if (diff !== 0 && enabledKeys.length > 0) {
+      const largestKey = enabledKeys.reduce((maxKey, k) => newWeights[k] > newWeights[maxKey] ? k : maxKey, enabledKeys[0]);
+      newWeights[largestKey] = Math.max(0, newWeights[largestKey] + diff);
+    }
+
+    setScoringWeights(newWeights);
   };
 
   const handleBulkImport = (replace: boolean) => {
@@ -1296,11 +1396,30 @@ export default function App() {
         }
       });
     } else {
+      const participant = state.participants?.find(p => p.id === participantId);
+      if (participant && !participant.agreedToDisclosure) {
+        setDisclosureWarningParticipant(participant);
+        return;
+      }
+
+      const currentLen = (state.transcriptionSession?.transcripts || []).length;
+      const updatedSession = {
+        ...(state.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+        interimTranscript: '',
+        activeTurnStartIndex: currentLen,
+        speakerTurnStartIndices: {
+          ...(state.transcriptionSession?.speakerTurnStartIndices || {}),
+          [participantId]: currentLen
+        }
+      };
+
       const videoUrl = state.settings?.openingStatementVideoUrl || '';
       if (videoUrl) {
         updateStateOnServer({
+          currentSpeakerId: participantId,
           openingStatementVideoPlayingForParticipantId: participantId,
           showOpeningStatementPopupForParticipantId: null,
+          transcriptionSession: updatedSession,
           timer: {
             ...state.timer,
             isRunning: false
@@ -1308,8 +1427,10 @@ export default function App() {
         });
       } else {
         updateStateOnServer({
+          currentSpeakerId: participantId,
           openingStatementVideoPlayingForParticipantId: null,
           showOpeningStatementPopupForParticipantId: participantId,
+          transcriptionSession: updatedSession,
           timer: {
             duration: 120,
             timeLeft: 120,
@@ -1494,6 +1615,7 @@ export default function App() {
 
     const updates: any = { 
       currentPhase: phaseId,
+      seatTimers: {},
       timer: {
         ...state.timer,
         duration: newDuration,
@@ -1513,28 +1635,105 @@ export default function App() {
 
   const handleToggleTimer = () => {
     const isRunning = !state.timer.isRunning;
-    updateStateOnServer({
-      timer: { ...state.timer, isRunning },
+    const newTimer = { ...state.timer, isRunning };
+    const updates: Partial<DebateState> = {
+      timer: newTimer,
       paused: !isRunning
-    });
+    };
+    if (state.currentSpeakerId) {
+      updates.seatTimers = {
+        ...(state.seatTimers || {}),
+        [state.currentSpeakerId]: newTimer
+      };
+    }
+    updateStateOnServer(updates);
   };
 
   const handleResetTimer = () => {
-    updateStateOnServer({
-      timer: { ...state.timer, timeLeft: state.timer.duration, isRunning: false },
+    const matchedPhase = state.settings?.phases?.find(p => p.id === state.currentPhase);
+    const defaultDuration = matchedPhase?.timerLength || 120;
+    const newTimer = { duration: defaultDuration, timeLeft: defaultDuration, isRunning: false };
+    const updates: Partial<DebateState> = {
+      timer: newTimer,
       paused: true
-    });
+    };
+    if (state.currentSpeakerId) {
+      updates.seatTimers = {
+        ...(state.seatTimers || {}),
+        [state.currentSpeakerId]: newTimer
+      };
+    }
+    updateStateOnServer(updates);
   };
 
   const handleAdjustTimer = (seconds: number) => {
     const newTime = Math.max(0, Math.min(state.timer.duration, state.timer.timeLeft + seconds));
-    updateStateOnServer({
-      timer: { ...state.timer, timeLeft: newTime }
-    });
+    const newTimer = { ...state.timer, timeLeft: newTime };
+    const updates: Partial<DebateState> = {
+      timer: newTimer
+    };
+    if (state.currentSpeakerId) {
+      updates.seatTimers = {
+        ...(state.seatTimers || {}),
+        [state.currentSpeakerId]: newTimer
+      };
+    }
+    updateStateOnServer(updates);
   };
 
-  const handleSelectSpeaker = (id: string) => {
-    updateStateOnServer({ currentSpeakerId: id });
+  const handleSelectSpeaker = (id: string | null) => {
+    const currentLen = (state?.transcriptionSession?.transcripts || []).length;
+    const updatedSession = id ? {
+      ...(state?.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+      interimTranscript: '',
+      activeTurnStartIndex: currentLen,
+      speakerTurnStartIndices: {
+        ...(state?.transcriptionSession?.speakerTurnStartIndices || {}),
+        [id]: currentLen
+      }
+    } : state?.transcriptionSession;
+
+    if (!id || id === state.currentSpeakerId) {
+      const isDeselect = id === state.currentSpeakerId;
+      const targetSpeakerId = isDeselect ? null : id;
+      updateStateOnServer({
+        currentSpeakerId: targetSpeakerId,
+        transcriptionSession: targetSpeakerId ? {
+          ...(state?.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
+          interimTranscript: '',
+          activeTurnStartIndex: currentLen,
+          speakerTurnStartIndices: {
+            ...(state?.transcriptionSession?.speakerTurnStartIndices || {}),
+            [targetSpeakerId]: currentLen
+          }
+        } : state?.transcriptionSession,
+        timer: { ...state.timer, isRunning: false }
+      });
+      return;
+    }
+
+    const matchedPhase = state.settings?.phases?.find(p => p.id === state.currentPhase);
+    const defaultDuration = matchedPhase?.timerLength || 120;
+    const existingSeatTimer = state.seatTimers?.[id];
+
+    const seatTimer = existingSeatTimer ? {
+      ...existingSeatTimer,
+      isRunning: true
+    } : {
+      duration: defaultDuration,
+      timeLeft: defaultDuration,
+      isRunning: true
+    };
+
+    updateStateOnServer({
+      currentSpeakerId: id,
+      transcriptionSession: updatedSession,
+      timer: seatTimer,
+      seatTimers: {
+        ...(state.seatTimers || {}),
+        [id]: seatTimer
+      }
+    });
   };
 
   const handleToggleSeated = (id: string) => {
@@ -1549,24 +1748,18 @@ export default function App() {
     const isNowSeated = !participant.isSeated;
 
     if (!isNowSeated) {
-      // Unseating them!
-      if (hasClaims) {
-        // If they have claims, keep them but set isSeated = false
-        updated = state.participants.map(p => {
-          if (p.id === id) {
-            return { ...p, isSeated: false, isSpeakerOut: true };
-          }
-          return p;
-        });
-      } else {
-        // If no claims, remove entirely!
-        updated = state.participants.filter(p => p.id !== id);
-      }
+      // Unseating them! Keep them in state.participants with isSeated = false and hasBeenSeated = true so their penalty score follows them
+      updated = state.participants.map(p => {
+        if (p.id === id) {
+          return { ...p, isSeated: false, hasBeenSeated: true, isSpeakerOut: true };
+        }
+        return p;
+      });
     } else {
       // Seating them!
       updated = state.participants.map(p => {
         if (p.id === id) {
-          return { ...p, isSeated: true, isSpeakerOut: false };
+          return { ...p, isSeated: true, hasBeenSeated: true, isSpeakerOut: false };
         }
         return p;
       });
@@ -1582,6 +1775,11 @@ export default function App() {
       participants: updated,
       currentSpeakerId: nextSpeakerId
     });
+
+    if (isNowSeated && state.currentPhase !== 'LOBBY') {
+      const seatedP = updated.find(p => p.id === id) || participant;
+      setDisclosureWarningParticipant(seatedP);
+    }
   };
 
   const handleSaveSpot = (role: 'PROPOSER' | 'CONTRARY', index: number) => {
@@ -1589,20 +1787,46 @@ export default function App() {
 
     const rawName = editingSpotName.trim();
     const formattedName = rawName.startsWith('@') ? rawName : `@${rawName}`;
+    const norm = formattedName.toLowerCase().replace(/^@/, '');
 
-    // Create custom approved participant directly
-    const newParticipant: Participant = {
-      id: `p-custom-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      name: formattedName,
-      role: role,
-      isSeated: true,
-      isMuted: false,
-      isSpeakerOut: false,
-      score: 100,
-      status: 'approved' as const
-    };
+    // Check if participant with exact same normalized name already exists
+    const existingIndex = (state.participants || []).findIndex(p => p.name.toLowerCase().replace(/^@/, '') === norm);
 
-    const updatedParticipants = [...(state.participants || []), newParticipant];
+    let updatedParticipants: Participant[];
+    let newlySeatedP: Participant | undefined;
+
+    if (existingIndex >= 0) {
+      // Participant exists! Reuse them so their score and penalties follow them
+      updatedParticipants = state.participants.map((p, idx) => {
+        if (idx === existingIndex) {
+          const item = {
+            ...p,
+            role: role,
+            isSeated: true,
+            hasBeenSeated: true,
+            status: 'approved' as const
+          };
+          newlySeatedP = item;
+          return item;
+        }
+        return p;
+      });
+    } else {
+      // Create custom approved participant directly
+      const newParticipant: Participant = {
+        id: `p-custom-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        name: formattedName,
+        role: role,
+        isSeated: true,
+        hasBeenSeated: true,
+        isMuted: false,
+        isSpeakerOut: false,
+        score: 100,
+        status: 'approved' as const
+      };
+      newlySeatedP = newParticipant;
+      updatedParticipants = [...(state.participants || []), newParticipant];
+    }
 
     updateStateOnServer({
       participants: updatedParticipants
@@ -1610,6 +1834,10 @@ export default function App() {
 
     setEditingSpotKey(null);
     setEditingSpotName('');
+
+    if (state.currentPhase !== 'LOBBY' && newlySeatedP) {
+      setDisclosureWarningParticipant(newlySeatedP);
+    }
   };
 
   const handleToggleMute = (id: string) => {
@@ -1623,9 +1851,12 @@ export default function App() {
   };
 
   const handleApproveParticipant = (id: string) => {
+    let approvedP: Participant | undefined;
     const updated = state.participants.map(p => {
       if (p.id === id) {
-        return { ...p, status: 'approved' as const, isSeated: true };
+        const item = { ...p, status: 'approved' as const, isSeated: true };
+        approvedP = item;
+        return item;
       }
       return p;
     });
@@ -1634,6 +1865,10 @@ export default function App() {
       participants: updated,
       currentSpeakerId: state.currentSpeakerId || (firstApproved ? firstApproved.id : null)
     });
+
+    if (state.currentPhase !== 'LOBBY' && approvedP) {
+      setDisclosureWarningParticipant(approvedP);
+    }
   };
 
   const handleDenyParticipant = (id: string) => {
@@ -1759,9 +1994,15 @@ export default function App() {
       const data = await response.json();
       
       const items: AISuggestedItem[] = (data.evidence || []).map((item: any) => ({
-        text: item.text,
-        source: item.source,
-        supportLevel: item.supportLevel || 'fully_supports',
+        claim: item.claim || claimText,
+        evidenceType: item.evidenceType || (item.supportLevel === 'partially_supports' ? 'Partial Support' : 'Direct Support'),
+        title: item.title || item.source || 'Verified Source',
+        url: item.url || '',
+        summary: item.summary || item.text || '',
+        verification: item.verification || 'Verified',
+        text: item.text || (item.summary ? `${item.summary} Source: ${item.source} (${item.url || ''})` : ''),
+        source: item.source || 'Verified Web Source',
+        supportLevel: item.supportLevel || (item.evidenceType === 'Partial Support' ? 'partially_supports' : 'fully_supports'),
         status: 'pending' as const
       }));
 
@@ -1956,14 +2197,54 @@ export default function App() {
 
         {/* Inner Content */}
         {!suggestionState || suggestionState.loading ? (
-          <div className="flex flex-col items-center justify-center py-6 px-4 gap-3">
-            <div className="flex items-center justify-center bg-purple-500/10 border border-purple-500/20 p-3 rounded-full animate-pulse">
-              <Sparkles className="w-6 h-6 text-purple-400 animate-spin" />
+          <div className="flex flex-col py-4 px-4 gap-3 bg-[#16171d] rounded-xl border border-[#2d2f39]">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center bg-purple-500/10 border border-purple-500/30 p-2.5 rounded-lg">
+                <Sparkles className="w-5 h-5 text-purple-400 animate-spin" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <div className="text-xs font-black text-purple-300 flex items-center gap-2">
+                  <span>Research Bot Pipeline Active</span>
+                  <span className="text-[9px] font-mono font-bold bg-purple-900/50 border border-purple-500/30 text-purple-200 px-1.5 py-0.2 rounded">
+                    LIVE LOGS
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-400">
+                  Executing multi-agent validation loops & evidence verification
+                </div>
+              </div>
             </div>
-            <div className="text-center">
-              <div className="text-xs font-bold text-gray-300">Searching Google & researching live evidence...</div>
-              <div className="text-[10px] text-gray-500 mt-1.5 italic font-mono max-w-md mx-auto line-clamp-2 px-4 bg-[#16171d] py-1.5 rounded-lg border border-[#2d2f39]/50">
-                "{claim.claimText}"
+
+            {/* Target Claim preview */}
+            <div className="text-[10px] text-purple-300/80 italic font-mono px-3 py-1.5 bg-[#101116] rounded-md border border-[#252733] truncate">
+              Target Claim: "{claim.claimText}"
+            </div>
+
+            {/* Live Thought Stream Log Box */}
+            <div className="bg-[#0b0c10] border border-[#232530] rounded-lg p-3 flex flex-col gap-2 font-mono text-[10px] max-h-[190px] overflow-y-auto scrollbar-thin">
+              <div className="flex items-center gap-2 text-purple-400 font-bold border-b border-white/5 pb-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
+                <span>[AGENT THOUGHT PROCESS]</span>
+              </div>
+              
+              <div className="flex items-start gap-2 text-gray-300">
+                <span className="text-purple-400 font-bold shrink-0">[1/4 Research Bot]:</span>
+                <span>Searching Google for genuine supporting sources matching claim...</span>
+              </div>
+
+              <div className="flex items-start gap-2 text-blue-300">
+                <span className="text-blue-400 font-bold shrink-0">[2/4 URL Validator]:</span>
+                <span>Checking target domain & web accessibility (verifying HTTP 200 vs 404/410 errors)...</span>
+              </div>
+
+              <div className="flex items-start gap-2 text-amber-300">
+                <span className="text-amber-400 font-bold shrink-0">[3/4 Source Validator]:</span>
+                <span>Comparing extracted page title & article context against claimed source attributes...</span>
+              </div>
+
+              <div className="flex items-start gap-2 text-emerald-300">
+                <span className="text-emerald-400 font-bold shrink-0">[4/4 Claim Matcher]:</span>
+                <span>Classifying evidence relevance: DIRECT SUPPORT vs PARTIAL SUPPORT...</span>
               </div>
             </div>
           </div>
@@ -1983,38 +2264,41 @@ export default function App() {
             </button>
           </div>
         ) : suggestionState.evidence.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-6 px-4 gap-2.5">
-            <div className="text-xs font-bold text-gray-400">No verified evidence found for this claim query.</div>
+          <div className="flex flex-col items-center justify-center py-6 px-4 gap-2.5 bg-[#16171d] rounded-lg border border-[#2d2f39]/50">
+            <div className="text-xs font-bold text-gray-300">No verified supporting evidence found.</div>
+            <div className="text-[10px] text-gray-500 text-center max-w-xs">
+              Helper agents (URL, Source, and Claim Match validators) rejected unverified or hallucinated evidence.
+            </div>
             <button
               type="button"
               onClick={() => handleAIResearch(claimId, claim.claimText)}
-              className="px-3.5 py-1.5 bg-purple-900/20 hover:bg-purple-900/40 border border-purple-500/20 text-purple-300 text-xs font-bold rounded-lg transition-colors cursor-pointer"
+              className="mt-1 px-3.5 py-1.5 bg-purple-900/20 hover:bg-purple-900/40 border border-purple-500/20 text-purple-300 text-xs font-bold rounded-lg transition-colors cursor-pointer"
             >
               Search Again
             </button>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            <div className="text-[10px] font-bold text-purple-400 uppercase tracking-wide">
-              RESOURCES FOUND BY GOOGLE SEARCH GROUNDING:
+            <div className="flex items-center justify-between text-[10px] font-bold text-purple-400 uppercase tracking-wide border-b border-purple-500/20 pb-1.5">
+              <span>Verified Evidence Items ({suggestionState.evidence.length})</span>
+              <span className="text-emerald-400 font-mono text-[9px] bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded">
+                ✓ Helper Agents Active
+              </span>
             </div>
-            <div className="max-h-[280px] overflow-y-auto pr-1 flex flex-col gap-2.5 scrollbar-thin">
+            <div className="max-h-[340px] overflow-y-auto pr-1 flex flex-col gap-3 scrollbar-thin">
               {suggestionState.evidence.map((item, idx) => {
                 const isAccepted = item.status === 'accepted';
                 const isDeclined = item.status === 'declined';
-                const isPartial = item.supportLevel === 'partially_supports';
+                const isPartial = item.evidenceType === 'Partial Support' || item.supportLevel === 'partially_supports';
                 
-                // Styles based on status and support level
                 let cardClass = "";
                 if (isAccepted) {
                   cardClass = "border-emerald-500/40 bg-emerald-950/15 shadow-sm";
                 } else if (isDeclined) {
                   cardClass = "border-red-950/20 opacity-30 bg-transparent shadow-none";
                 } else if (isPartial) {
-                  // highlighted orange background
                   cardClass = "bg-orange-500/10 border-orange-500/40 hover:border-orange-500/60 shadow-md shadow-orange-950/10";
                 } else {
-                  // support should be blue
                   cardClass = "bg-blue-500/10 border-blue-500/40 hover:border-blue-500/60 shadow-md shadow-blue-950/10";
                 }
                 
@@ -2023,27 +2307,67 @@ export default function App() {
                     key={idx} 
                     className={`border rounded-xl p-3 flex flex-col gap-2 transition-all ${cardClass}`}
                   >
-                    {/* Support level label header */}
-                    <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-1.5">
-                      <span className="text-[9px] font-mono text-gray-400">
-                        Resource #{idx + 1}
+                    {/* Header line: Evidence Type + Verification badge */}
+                    <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-1.5 text-[10px]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-gray-400 text-[9px]">
+                          Item #{idx + 1}
+                        </span>
+                        {isPartial ? (
+                          <span className="px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wide bg-orange-500/15 border border-orange-500/30 text-orange-400 rounded-md">
+                            Partial Support
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wide bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-md">
+                            Direct Support
+                          </span>
+                        )}
+                      </div>
+
+                      <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 rounded-md flex items-center gap-1">
+                        <span>Verification:</span>
+                        <span className="font-extrabold text-emerald-400">Verified ✓</span>
                       </span>
-                      {isPartial ? (
-                        <span className="px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wide bg-orange-500/15 border border-orange-500/30 text-orange-400 rounded-md">
-                          Partially Supports Claim
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wide bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-md">
-                          Fully Supports Claim
-                        </span>
-                      )}
                     </div>
 
-                    <div className={`text-xs leading-relaxed transition-all ${isDeclined ? 'text-gray-500 line-through' : 'text-gray-200'}`}>
-                      {renderTextWithClickableURLs(item.text)}
+                    {/* Structured Display Format */}
+                    <div className="flex flex-col gap-1 text-[11px] leading-relaxed">
+                      {item.title && (
+                        <div>
+                          <span className="text-gray-400 font-bold">Title: </span>
+                          <span className="text-white font-medium">{item.title}</span>
+                        </div>
+                      )}
+                      
+                      <div>
+                        <span className="text-gray-400 font-bold">Source: </span>
+                        <span className="text-purple-300 font-semibold">{item.source}</span>
+                      </div>
+
+                      {item.url && (
+                        <div className="truncate">
+                          <span className="text-gray-400 font-bold">URL: </span>
+                          <a 
+                            href={item.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="text-blue-400 hover:underline font-mono text-[10px]"
+                          >
+                            {item.url}
+                          </a>
+                        </div>
+                      )}
+
+                      <div className="mt-1 bg-[#16171d]/80 p-2 rounded-lg border border-[#2d2f39]/60">
+                        <span className="text-gray-400 font-bold block text-[10px] mb-0.5">Summary:</span>
+                        <span className={`text-xs ${isDeclined ? 'text-gray-500 line-through' : 'text-gray-200'}`}>
+                          {item.summary || renderTextWithClickableURLs(item.text)}
+                        </span>
+                      </div>
                     </div>
+
                     <div className="flex items-center justify-between gap-3 border-t border-white/5 pt-2 text-[10px] font-bold">
-                      <span className="text-gray-400 truncate max-w-[50%]">Source: {item.source}</span>
+                      <span className="text-gray-500 text-[9px] italic">Claim: "{claim.claimText}"</span>
                       
                       <div className="flex items-center gap-1.5">
                         {isAccepted ? (
@@ -2065,7 +2389,7 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleAcceptAIEvidence(claimId, idx, item.text, item.source)}
+                              onClick={() => handleAcceptAIEvidence(claimId, idx, item.summary || item.text, item.source)}
                               className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-600 hover:text-white border border-emerald-500/30 text-emerald-400 font-black tracking-wide uppercase text-[9px] rounded-md transition-all cursor-pointer"
                             >
                               Accept
@@ -2110,6 +2434,7 @@ export default function App() {
   };
 
   const handleDeductPoints = () => {
+    playPenaltyBuzzerSound();
     const amount = 5;
     const updatedScores = { ...state.scores };
     if (deductTarget === 'PROPOSER') {
@@ -2118,6 +2443,7 @@ export default function App() {
       updatedScores.conScore = Math.max(0, updatedScores.conScore - amount);
     }
 
+    const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const systemClaim: Claim = {
       id: `system-${Date.now()}`,
       speakerId: 'system',
@@ -2125,12 +2451,25 @@ export default function App() {
       text: `Deducted 5 pts from ${deductTarget} team. Reason: ${pointsReason.trim() || 'No reason specified'}`,
       round: state.currentRound,
       phase: state.currentPhase,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      timestamp: timestampStr
+    };
+
+    const activeNotice: ActiveViolationNotice = {
+      id: `violation-notice-${Date.now()}`,
+      createdTime: Date.now(),
+      participantId: deductTarget,
+      participantName: deductTarget === 'PROPOSER' ? 'Proposer Team' : 'Contrary Team',
+      participantRole: deductTarget === 'PROPOSER' ? 'Pro Team' : 'Con Team',
+      ruleId: 'quick-deduction',
+      ruleName: 'Conduct Violation Penalty',
+      ruleDescription: pointsReason.trim() || 'Conduct violation recorded by host.',
+      timestamp: timestampStr
     };
 
     updateStateOnServer({
       scores: updatedScores,
-      claims: [systemClaim, ...state.claims]
+      claims: [systemClaim, ...state.claims],
+      activeViolationNotice: activeNotice
     });
     setPointsReason('');
   };
@@ -2292,6 +2631,9 @@ export default function App() {
     if (!participant || !rule) return;
 
     const pointsDeducted = rule.deductPoints ? rule.pointValue : 0;
+    if (pointsDeducted > 0) {
+      playPenaltyBuzzerSound();
+    }
 
     // Update participant score (starts at 100, can't go below 0)
     const updatedParticipants = state.participants.map(p => {
@@ -2341,11 +2683,24 @@ export default function App() {
 
     const currentViolations = state.violations || [];
 
+    const activeNotice: ActiveViolationNotice = {
+      id: `violation-notice-${Date.now()}`,
+      createdTime: Date.now(),
+      participantId: participant.id,
+      participantName: participant.name,
+      participantRole: participant.role === 'PROPOSER' ? 'Pro Team' : participant.role === 'CONTRARY' ? 'Con Team' : 'Panelist',
+      ruleId: rule.id,
+      ruleName: rule.name,
+      ruleDescription: rule.description,
+      timestamp: timestampStr
+    };
+
     updateStateOnServer({
       participants: updatedParticipants,
       scores: updatedScores,
       claims: [systemClaim, ...state.claims],
-      violations: [newViolation, ...currentViolations]
+      violations: [newViolation, ...currentViolations],
+      activeViolationNotice: activeNotice
     });
 
     // Reset only the rule select, keep the participant selected in case they violate again
@@ -2356,20 +2711,41 @@ export default function App() {
     e.preventDefault();
     if (!newPersonName.trim()) return;
 
-    const newId = `p-${Date.now()}`;
-    const newParticipant: Participant = {
-      id: newId,
-      name: newPersonName.trim(),
-      role: newPersonRole,
-      isSeated: false,
-      isMuted: false,
-      isSpeakerOut: false,
-      score: 100
-    };
+    const rawName = newPersonName.trim();
+    const formattedName = rawName.startsWith('@') ? rawName : `@${rawName}`;
+    const norm = formattedName.toLowerCase().replace(/^@/, '');
+
+    const existingIndex = (state.participants || []).findIndex(p => p.name.toLowerCase().replace(/^@/, '') === norm);
+
+    let updatedParticipants: Participant[];
+    let targetId = state.currentSpeakerId;
+
+    if (existingIndex >= 0) {
+      targetId = state.participants[existingIndex].id;
+      updatedParticipants = state.participants.map((p, idx) => {
+        if (idx === existingIndex) {
+          return { ...p, role: newPersonRole };
+        }
+        return p;
+      });
+    } else {
+      const newId = `p-${Date.now()}`;
+      targetId = newId;
+      const newParticipant: Participant = {
+        id: newId,
+        name: formattedName,
+        role: newPersonRole,
+        isSeated: false,
+        isMuted: false,
+        isSpeakerOut: false,
+        score: 100
+      };
+      updatedParticipants = [...(state.participants || []), newParticipant];
+    }
 
     updateStateOnServer({
-      participants: [...state.participants, newParticipant],
-      currentSpeakerId: state.currentSpeakerId || newId // Auto select if none active
+      participants: updatedParticipants,
+      currentSpeakerId: state.currentSpeakerId || targetId
     });
 
     setNewPersonName('');
@@ -2671,7 +3047,14 @@ export default function App() {
                             isActive ? 'text-[#f97316]' : 'text-gray-300'
                           }`}
                         >
-                          <span className="truncate max-w-[120px]">{p.name}</span>
+                          <div className="flex items-center gap-1.5 truncate max-w-[130px]">
+                            <span className="truncate">{p.name}</span>
+                            {p.agreedToDisclosure ? (
+                              <span className="text-[9px] text-emerald-400 font-bold" title="Agreed to Disclosure">✓</span>
+                            ) : (
+                              <span className="text-[9px] text-amber-400 font-bold" title="Needs Disclosure Agreement">⚠️</span>
+                            )}
+                          </div>
                           <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${
                             p.role === 'PROPOSER' 
                               ? 'bg-emerald-500/10 text-emerald-400' 
@@ -2904,7 +3287,7 @@ export default function App() {
             state.currentPhase === 'LOBBY' ? (
               /* LOBBY VIEW - FULL GRID */
               <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto max-w-4xl mx-auto w-full">
-                <div className="text-center mb-8">
+                <div className="text-center mb-6">
                   <span className="text-[10px] font-black tracking-widest text-[#f97316] bg-[#f97316]/10 px-3 py-1 rounded-full uppercase border border-[#f97316]/20">
                     Host Desk
                   </span>
@@ -2912,6 +3295,158 @@ export default function App() {
                   <p className="text-sm text-[#94a3b8] mt-1 font-semibold">
                     {state.currentRound} — seat participants before starting the timer
                   </p>
+                </div>
+
+                {/* STAGE PROMPT & PICTURE SETUP CARD */}
+                <div className="w-full bg-[#101114] border border-[#1d1e24] rounded-xl p-5 mb-6 flex flex-col gap-4 shadow-lg">
+                  <div className="flex items-center justify-between border-b border-[#1d1e24] pb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-[#f97316]" />
+                      <h3 className="font-sans font-black tracking-wider text-xs text-white uppercase">
+                        Stage Topic & Picture Setup
+                      </h3>
+                    </div>
+                    <span className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider">
+                      Live Control
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {/* Topic Input */}
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider flex items-center justify-between">
+                        <span>Debate Topic / Prompt</span>
+                        <span className="text-gray-500 font-medium">Stage Header</span>
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={panelistTopicInput !== '' ? panelistTopicInput : (state.settings?.debateTopic || '')}
+                        onChange={(e) => setPanelistTopicInput(e.target.value)}
+                        placeholder="Enter debate topic..."
+                        className="w-full bg-[#16171d] border border-[#2d2f39] focus:border-[#f97316] text-xs text-white p-2.5 rounded-lg focus:outline-none resize-none font-semibold"
+                      />
+                      <button
+                        onClick={() => {
+                          const val = panelistTopicInput.trim() || state.settings?.debateTopic || '';
+                          updateStateOnServer({
+                            settings: {
+                              ...state.settings,
+                              debateTopic: val
+                            }
+                          });
+                        }}
+                        className="self-end px-3 py-1.5 bg-[#f97316] hover:bg-[#ea580c] text-white text-[11px] font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Update Topic on Stage</span>
+                      </button>
+                    </div>
+
+                    {/* Stage Picture Upload */}
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider flex items-center justify-between">
+                        <span>Lobby Stage Picture (Optional)</span>
+                        <span className="text-gray-500 font-medium">Under Prompt</span>
+                      </label>
+
+                      {state.settings?.lobbyImageUrl ? (
+                        <div className="flex items-center gap-3 bg-[#16171d] border border-emerald-500/30 p-2.5 rounded-lg flex-1">
+                          <img 
+                            src={state.settings.lobbyImageUrl} 
+                            alt="Stage Preview" 
+                            className="w-16 h-12 object-cover rounded border border-[#2d2f39] bg-black shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-emerald-400 font-bold flex items-center gap-1">
+                              <span>✓ Picture Active on Stage</span>
+                            </p>
+                            <p className="text-[10px] text-gray-400 truncate mt-0.5">
+                              Displays under prompt in Lobby
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateStateOnServer({
+                                settings: {
+                                  ...state.settings,
+                                  lobbyImageUrl: ''
+                                }
+                              });
+                            }}
+                            className="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-colors cursor-pointer shrink-0"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="flex-1 flex flex-col items-center justify-center gap-1.5 bg-[#16171d] hover:bg-[#1c1d25] border border-dashed border-[#2d2f39] hover:border-[#f97316] text-gray-300 hover:text-white p-3 rounded-lg cursor-pointer transition-all min-h-[70px]">
+                          <div className="flex items-center gap-2">
+                            <Upload className="w-4 h-4 text-[#f97316]" />
+                            <span className="text-xs font-bold">Upload Local Picture File...</span>
+                          </div>
+                          <span className="text-[10px] text-gray-500">JPG, PNG, WEBP, GIF</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              if (!file.type.startsWith('image/')) {
+                                alert('Please select an image file.');
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onload = (evt) => {
+                                const base64 = evt.target?.result as string;
+                                if (base64) {
+                                  updateStateOnServer({
+                                    settings: {
+                                      ...state.settings,
+                                      lobbyImageUrl: base64
+                                    }
+                                  });
+                                }
+                              };
+                              reader.readAsDataURL(file);
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* STANDALONE GENERAL DISCLOSURE TTS BUTTON ABOVE TEAMS */}
+                <div className="w-full bg-[#101114] border border-cyan-500/40 hover:border-cyan-400/80 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg shadow-cyan-950/20 bg-gradient-to-r from-cyan-950/20 via-[#101114] to-blue-950/20 transition-all">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-cyan-500/20 border border-cyan-400/50 rounded-xl text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+                      <Volume2 className="w-5 h-5 text-cyan-300 animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="font-sans font-black tracking-wider text-xs text-cyan-300 uppercase flex items-center gap-2">
+                        <span>Guidelines & AI Disclosure Notice (TTS)</span>
+                        <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 text-[9px] font-extrabold rounded-full border border-cyan-400/40">Lobby Broadcast</span>
+                      </h3>
+                      <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+                        Play the full disclosure speech on stage anytime before opening statements. Does not mark participants as agreed or auto-launch opening statements.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleTriggerDisclosureSpeech('general')}
+                    className={`px-4 py-2.5 rounded-xl font-black text-xs border transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shrink-0 w-full sm:w-auto ${
+                      state?.activeDisclosureParticipantId === 'general'
+                        ? 'bg-cyan-500 text-black border-cyan-300 shadow-cyan-500/30 animate-pulse'
+                        : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border-cyan-400/50 hover:border-cyan-300'
+                    }`}
+                  >
+                    <Volume2 className="w-4 h-4" />
+                    <span>{state?.activeDisclosureParticipantId === 'general' ? 'Stop Disclosure Speech' : 'Play Guidelines & Disclosure (TTS)'}</span>
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full mb-8">
@@ -2943,6 +3478,35 @@ export default function App() {
                                       {p.score ?? 100} pts
                                     </span>
                                   </span>
+
+                                  {/* Disclosure Agreement Controls */}
+                                  <div className="flex items-center gap-2 mt-1.5">
+                                    <label className="flex items-center gap-1.5 cursor-pointer text-[10px] font-bold select-none bg-[#101114] px-2 py-0.5 rounded border border-[#2d2f39]">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!p.agreedToDisclosure}
+                                        onChange={() => handleToggleDisclosureAgreed(p.id)}
+                                        className="w-3.5 h-3.5 rounded border-gray-700 text-[#f97316] focus:ring-[#f97316] accent-[#f97316] cursor-pointer"
+                                      />
+                                      <span className={p.agreedToDisclosure ? 'text-emerald-400 font-bold' : 'text-amber-400 font-semibold'}>
+                                        {p.agreedToDisclosure ? '✓ Agreed to Disclosure' : 'Agreed to Disclosure'}
+                                      </span>
+                                    </label>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleTriggerDisclosureSpeech(p.id)}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
+                                        state?.activeDisclosureParticipantId === p.id
+                                          ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400 animate-pulse'
+                                          : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20'
+                                      }`}
+                                      title="Play Guidelines & Disclosure Speech on Stage"
+                                    >
+                                      <Volume2 className="w-3 h-3" />
+                                      <span>{state?.activeDisclosureParticipantId === p.id ? 'Speaking...' : 'TTS'}</span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                               
@@ -3092,6 +3656,35 @@ export default function App() {
                                       {p.score ?? 100} pts
                                     </span>
                                   </span>
+
+                                  {/* Disclosure Agreement Controls */}
+                                  <div className="flex items-center gap-2 mt-1.5">
+                                    <label className="flex items-center gap-1.5 cursor-pointer text-[10px] font-bold select-none bg-[#101114] px-2 py-0.5 rounded border border-[#2d2f39]">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!p.agreedToDisclosure}
+                                        onChange={() => handleToggleDisclosureAgreed(p.id)}
+                                        className="w-3.5 h-3.5 rounded border-gray-700 text-red-500 focus:ring-red-500 accent-red-500 cursor-pointer"
+                                      />
+                                      <span className={p.agreedToDisclosure ? 'text-emerald-400 font-bold' : 'text-amber-400 font-semibold'}>
+                                        {p.agreedToDisclosure ? '✓ Agreed to Disclosure' : 'Agreed to Disclosure'}
+                                      </span>
+                                    </label>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleTriggerDisclosureSpeech(p.id)}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
+                                        state?.activeDisclosureParticipantId === p.id
+                                          ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400 animate-pulse'
+                                          : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20'
+                                      }`}
+                                      title="Play Guidelines & Disclosure Speech on Stage"
+                                    >
+                                      <Volume2 className="w-3 h-3" />
+                                      <span>{state?.activeDisclosureParticipantId === p.id ? 'Speaking...' : 'TTS'}</span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                               
@@ -3278,23 +3871,41 @@ export default function App() {
 
                                 <div className="flex items-center gap-1.5 opacity-85 group-hover:opacity-100 shrink-0">
                                   {p.isSeated && (() => {
-                                    const isActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
+                                    const isStatementActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
+                                    const isSpeechActive = state?.activeDisclosureParticipantId === p.id;
                                     return (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleToggleOpeningStatement(p.id);
-                                        }}
-                                        className={`px-2 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
-                                          isActive
-                                            ? 'bg-[#f97316]/20 text-[#f97316] border-[#f97316]/40 shadow-sm shadow-[#f97316]/5'
-                                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
-                                        }`}
-                                        title={isActive ? 'Close Opening Statement on Stage' : 'Open Opening Statement on Stage'}
-                                      >
-                                        <BookOpen className="w-2.5 h-2.5 shrink-0" />
-                                        <span>{isActive ? 'Close Statement' : 'Open Statement'}</span>
-                                      </button>
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleTriggerDisclosureSpeech(p.id);
+                                          }}
+                                          className={`px-1.5 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
+                                            isSpeechActive
+                                              ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400 animate-pulse'
+                                              : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20'
+                                          }`}
+                                          title={isSpeechActive ? 'Playing Guidelines & Disclosure Speech...' : 'Play Guidelines & Disclosure Speech (TTS)'}
+                                        >
+                                          <Volume2 className="w-2.5 h-2.5 shrink-0" />
+                                          <span>{isSpeechActive ? 'Speaking...' : 'TTS'}</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleToggleOpeningStatement(p.id);
+                                          }}
+                                          className={`px-2 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
+                                            isStatementActive
+                                              ? 'bg-[#f97316]/20 text-[#f97316] border-[#f97316]/40 shadow-sm shadow-[#f97316]/5'
+                                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                                          }`}
+                                          title={isStatementActive ? 'Close Opening Statement on Stage' : 'Open Opening Statement on Stage'}
+                                        >
+                                          <BookOpen className="w-2.5 h-2.5 shrink-0" />
+                                          <span>{isStatementActive ? 'Close Statement' : 'Open Statement'}</span>
+                                        </button>
+                                      </div>
                                     );
                                   })()}
                                   <button
@@ -3450,23 +4061,41 @@ export default function App() {
 
                                 <div className="flex items-center gap-1.5 opacity-85 group-hover:opacity-100 shrink-0">
                                   {p.isSeated && (() => {
-                                    const isActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
+                                    const isStatementActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
+                                    const isSpeechActive = state?.activeDisclosureParticipantId === p.id;
                                     return (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleToggleOpeningStatement(p.id);
-                                        }}
-                                        className={`px-2 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
-                                          isActive
-                                            ? 'bg-[#f97316]/20 text-[#f97316] border-[#f97316]/40 shadow-sm shadow-[#f97316]/5'
-                                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
-                                        }`}
-                                        title={isActive ? 'Close Opening Statement on Stage' : 'Open Opening Statement on Stage'}
-                                      >
-                                        <BookOpen className="w-2.5 h-2.5 shrink-0" />
-                                        <span>{isActive ? 'Close Statement' : 'Open Statement'}</span>
-                                      </button>
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleTriggerDisclosureSpeech(p.id);
+                                          }}
+                                          className={`px-1.5 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
+                                            isSpeechActive
+                                              ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400 animate-pulse'
+                                              : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20'
+                                          }`}
+                                          title={isSpeechActive ? 'Playing Guidelines & Disclosure Speech...' : 'Play Guidelines & Disclosure Speech (TTS)'}
+                                        >
+                                          <Volume2 className="w-2.5 h-2.5 shrink-0" />
+                                          <span>{isSpeechActive ? 'Speaking...' : 'TTS'}</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleToggleOpeningStatement(p.id);
+                                          }}
+                                          className={`px-2 py-0.5 rounded text-[9px] font-black tracking-wide cursor-pointer border flex items-center gap-1 transition-colors ${
+                                            isStatementActive
+                                              ? 'bg-[#f97316]/20 text-[#f97316] border-[#f97316]/40 shadow-sm shadow-[#f97316]/5'
+                                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                                          }`}
+                                          title={isStatementActive ? 'Close Opening Statement on Stage' : 'Open Opening Statement on Stage'}
+                                        >
+                                          <BookOpen className="w-2.5 h-2.5 shrink-0" />
+                                          <span>{isStatementActive ? 'Close Statement' : 'Open Statement'}</span>
+                                        </button>
+                                      </div>
                                     );
                                   })()}
                                   <button
@@ -4755,8 +5384,7 @@ export default function App() {
                                               key={slide.id}
                                               type="button"
                                               onClick={() => updateStateOnServer({
-                                                rebuttalSlideIndex: idx,
-                                                rebuttalTargetClaimId: slide.claimId
+                                                rebuttalSlideIndex: idx
                                               })}
                                               className={`w-full p-1.5 rounded text-left transition-all cursor-pointer flex items-center justify-between gap-2 border text-[10px] ${
                                                 isActiveSlide
@@ -6245,7 +6873,6 @@ export default function App() {
                                   <button
                                     onClick={() => {
                                       updateStateOnServer({
-                                        ...state,
                                         rebuttalTargetClaimId: state.rebuttalTargetClaimId === claim.claimId ? null : claim.claimId
                                       });
                                     }}
@@ -6506,184 +7133,825 @@ export default function App() {
           )}
 
           {activeTab === 'score' && (
-            /* SCORECARD MANAGEMENT TAB */
-            <div className="flex-1 flex flex-col p-6 overflow-y-auto">
-              <div className="mb-4 shrink-0">
-                <h1 className="text-xl font-black text-white">Scorecard & Deductions</h1>
-                <p className="text-xs text-[#64748b]">Real-time judge score state and compliance deduction logging</p>
-              </div>
-
-              {/* AI TRANSCRIPTION BOT ON HOST DESK ABOVE PENALTY CARD */}
-              <div className="mb-6 shrink-0">
-                <AITranscriptionBot
-                  state={state}
-                  updateStateOnServer={updateStateOnServer}
-                  seatedPanelists={state.participants.filter((p: any) => p.isSeated && p.status !== 'pending')}
-                  formalClaims={state.formalClaims || []}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 shrink-0">
-                {/* PRO Scorecard */}
-                <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-xl flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-[#f97316] tracking-wider uppercase">{getProTeamName().toUpperCase()} TEAM SCORE</span>
-                    <h2 className="text-5xl font-sans font-black text-white mt-1.5">{state.scores.proScore} <span className="text-sm text-gray-500">pts</span></h2>
-                    <p className="text-[11px] text-[#64748b] mt-1">Starting balance: 100 points</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        const scores = { ...state.scores, proScore: Math.max(0, state.scores.proScore - 5) };
-                        updateStateOnServer({ scores });
-                      }}
-                      className="bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 text-red-400 p-2 text-xs font-bold rounded-lg cursor-pointer transition-colors"
-                    >
-                      -5 Pts
-                    </button>
-                    <button 
-                      onClick={() => {
-                        const scores = { ...state.scores, proScore: state.scores.proScore + 5 };
-                        updateStateOnServer({ scores });
-                      }}
-                      className="bg-emerald-600/10 hover:bg-emerald-600/25 border border-emerald-500/20 text-emerald-400 p-2 text-xs font-bold rounded-lg cursor-pointer transition-colors"
-                    >
-                      +5 Pts
-                    </button>
-                  </div>
-                </div>
-
-                {/* CON Scorecard */}
-                <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-xl flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-red-400 tracking-wider uppercase">{getConTeamName().toUpperCase()} TEAM SCORE</span>
-                    <h2 className="text-5xl font-sans font-black text-white mt-1.5">{state.scores.conScore} <span className="text-sm text-gray-500">pts</span></h2>
-                    <p className="text-[11px] text-[#64748b] mt-1">Starting balance: 100 points</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        const scores = { ...state.scores, conScore: Math.max(0, state.scores.conScore - 5) };
-                        updateStateOnServer({ scores });
-                      }}
-                      className="bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 text-red-400 p-2 text-xs font-bold rounded-lg cursor-pointer transition-colors"
-                    >
-                      -5 Pts
-                    </button>
-                    <button 
-                      onClick={() => {
-                        const scores = { ...state.scores, conScore: state.scores.conScore + 5 };
-                        updateStateOnServer({ scores });
-                      }}
-                      className="bg-emerald-600/10 hover:bg-emerald-600/25 border border-emerald-500/20 text-emerald-400 p-2 text-xs font-bold rounded-lg cursor-pointer transition-colors"
-                    >
-                      +5 Pts
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* COMPREHENSIVE TUG-OF-WAR SCOREBOARD */}
-              {state.scoringCalculations && (
-                <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-xl mb-6 shrink-0 flex flex-col gap-4">
-                  <div className="flex items-center justify-between border-b border-[#1d1e24] pb-2">
-                    <div>
-                      <h3 className="text-xs font-black tracking-wider text-[#f97316] uppercase">TUG-OF-WAR FINAL SCOREBOARD</h3>
-                      <p className="text-[10px] text-gray-400">Weighted compilation of all active scoring categories</p>
+            /* SCORECARD OVERVIEW SNAPSHOT TAB */
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto gap-6 bg-[#0a0b0d]">
+              {/* SNAPSHOT HEADER */}
+              <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1d1e24] pb-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Trophy className="w-5 h-5 text-[#f97316]" />
+                      <h1 className="text-xl font-black text-white uppercase tracking-wide">Live Scorecard Overview</h1>
                     </div>
-                    {state.settings.scoringSettings?.testMode && (
-                      <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded">
-                        TEST/PREVIEW MODE ACTIVE
-                      </span>
-                    )}
+                    <p className="text-xs text-[#64748b] mt-0.5">Real-time weighted score snapshot across judges, penalties, chat, and popular votes</p>
                   </div>
+                  {state.scoringCalculations && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className={`px-3 py-1.5 rounded-xl border text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                        state.scoringCalculations.winningSide === 'PROPOSER'
+                          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                          : state.scoringCalculations.winningSide === 'CONTRARY'
+                          ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+                          : 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                      }`}>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>
+                          {state.scoringCalculations.scoreDifference === 0 
+                            ? 'PERFECT TIE' 
+                            : `${state.scoringCalculations.winningSide === 'PROPOSER' ? getProTeamName() : getConTeamName()} LEADS BY ${state.scoringCalculations.scoreDifference.toFixed(1)} PTS`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-                  {/* Dynamic Visual Tug-of-War Bar */}
-                  <div className="flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between text-xs font-bold">
-                      <div className="flex items-center gap-1 text-emerald-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                        <span>Affirmative ({state.scoringCalculations.pro.finalScore})</span>
+                {/* TUG-OF-WAR FINAL SCORES SNAPSHOT */}
+                {state.scoringCalculations && (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Pro Team Overall Score */}
+                      <div className="bg-[#16171d]/80 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">{getProTeamName()} TEAM</span>
+                          <h2 className="text-3xl font-mono font-black text-white mt-1">
+                            {state.scoringCalculations.pro.finalScore.toFixed(1)} <span className="text-xs text-gray-400 font-sans font-normal">pts</span>
+                          </h2>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-gray-400 uppercase font-bold">Judge: {state.scoringCalculations.pro.judgeScore.contribution.toFixed(1)}</span>
+                          <div className="text-[10px] text-gray-500">Penalties: {state.scoringCalculations.pro.penaltyCard.contribution.toFixed(1)}</div>
+                        </div>
                       </div>
-                      <div className="text-[#64748b] text-[10px] uppercase font-black tracking-wider">
-                        {state.scoringCalculations.scoreDifference === 0 ? (
-                          "Perfect Tie"
-                        ) : (
-                          `${state.scoringCalculations.winningSide === 'PROPOSER' ? 'Affirmative' : 'Opposition'} leads by ${state.scoringCalculations.scoreDifference} pts`
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 text-rose-400">
-                        <span>Opposition ({state.scoringCalculations.con.finalScore})</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+
+                      {/* Con Team Overall Score */}
+                      <div className="bg-[#16171d]/80 border border-rose-500/20 p-4 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest">{getConTeamName()} TEAM</span>
+                          <h2 className="text-3xl font-mono font-black text-white mt-1">
+                            {state.scoringCalculations.con.finalScore.toFixed(1)} <span className="text-xs text-gray-400 font-sans font-normal">pts</span>
+                          </h2>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-gray-400 uppercase font-bold">Judge: {state.scoringCalculations.con.judgeScore.contribution.toFixed(1)}</span>
+                          <div className="text-[10px] text-gray-500">Penalties: {state.scoringCalculations.con.penaltyCard.contribution.toFixed(1)}</div>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="h-3 w-full bg-gray-900 rounded-full overflow-hidden flex border border-[#1d1e24]">
-                      {/* Pro bar */}
+                    {/* Progress Tug-of-War Bar */}
+                    <div className="h-3.5 w-full bg-gray-900 rounded-full overflow-hidden flex border border-[#2d2f39] p-0.5">
                       <div 
-                        className="bg-emerald-500 transition-all duration-500"
+                        className="bg-emerald-500 rounded-l-full transition-all duration-500"
                         style={{ 
                           width: `${(state.scoringCalculations.pro.finalScore + state.scoringCalculations.con.finalScore) > 0 
                             ? (state.scoringCalculations.pro.finalScore / (state.scoringCalculations.pro.finalScore + state.scoringCalculations.con.finalScore)) * 100 
                             : 50}%` 
                         }}
                       />
-                      {/* Divider mark in middle */}
-                      <div className="w-0.5 bg-black h-full z-10" />
-                      {/* Con bar */}
-                      <div 
-                        className="bg-rose-500 transition-all duration-500 flex-1"
-                      />
+                      <div className="w-1 bg-black h-full z-10 shrink-0" />
+                      <div className="bg-rose-500 rounded-r-full transition-all duration-500 flex-1" />
+                    </div>
+
+                    {/* Category Weights Badges */}
+                    <div className="flex flex-wrap items-center justify-between text-[11px] text-gray-400 border-t border-[#1d1e24] pt-3">
+                      <span className="font-bold text-gray-300">Category Weight Allocations:</span>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-[#181a24] border border-gray-800 rounded text-gray-300 font-mono">
+                          Judges: <strong className="text-white">{scoringWeights.judgeScore}%</strong>
+                        </span>
+                        <span className="px-2 py-0.5 bg-[#181a24] border border-gray-800 rounded text-gray-300 font-mono">
+                          Penalties: <strong className="text-white">{scoringWeights.penaltyCard}%</strong>
+                        </span>
+                        <span className="px-2 py-0.5 bg-[#181a24] border border-gray-800 rounded text-gray-300 font-mono">
+                          Chat: <strong className="text-white">{scoringWeights.chatVote}%</strong>
+                        </span>
+                        <span className="px-2 py-0.5 bg-[#181a24] border border-gray-800 rounded text-gray-300 font-mono">
+                          Popular: <strong className="text-white">{scoringWeights.popularVote}%</strong>
+                        </span>
+                      </div>
                     </div>
                   </div>
+                )}
+              </div>
 
-                  {/* Detailed breakdown columns */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-center mt-1">
-                    {/* Penalty breakdown */}
-                    <div className="bg-[#16171d]/60 border border-[#2d2f39]/50 p-2.5 rounded-xl flex flex-col gap-1">
-                      <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">Penalty Card</span>
-                      <div className="text-xs font-bold text-white font-mono">
-                        {state.scoringCalculations.pro.penaltyCard.raw} vs {state.scoringCalculations.con.penaltyCard.raw}
-                      </div>
-                      <span className="text-[8px] text-gray-500">Weight: {state.scoringCalculations.pro.penaltyCard.weight}%</span>
+              {/* SECTION 1: JUDGES SCORES PER PERSPECTIVE & PRESENCE (ONLINE/OFFLINE) */}
+              <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-4 shadow-xl">
+                <div className="flex items-center justify-between border-b border-[#1d1e24] pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                      <Gavel className="w-4 h-4" />
                     </div>
-
-                    {/* Judge breakdown */}
-                    <div className="bg-[#16171d]/60 border border-[#2d2f39]/50 p-2.5 rounded-xl flex flex-col gap-1">
-                      <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">Judge Ballot</span>
-                      <div className="text-xs font-bold text-white font-mono">
-                        {state.scoringCalculations.pro.judgeScore.raw} vs {state.scoringCalculations.con.judgeScore.raw}
-                      </div>
-                      <span className="text-[8px] text-gray-500">Weight: {state.scoringCalculations.pro.judgeScore.weight}%</span>
-                    </div>
-
-                    {/* Chat breakdown */}
-                    <div className="bg-[#16171d]/60 border border-[#2d2f39]/50 p-2.5 rounded-xl flex flex-col gap-1">
-                      <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">Viewer Chat</span>
-                      <div className="text-xs font-bold text-white font-mono">
-                        {Math.round(state.scoringCalculations.pro.chatVote.raw)}% vs {Math.round(state.scoringCalculations.con.chatVote.raw)}%
-                      </div>
-                      <span className="text-[8px] text-gray-500">Weight: {state.scoringCalculations.pro.chatVote.weight}%</span>
-                    </div>
-
-                    {/* Popular breakdown */}
-                    <div className="bg-[#16171d]/60 border border-[#2d2f39]/50 p-2.5 rounded-xl flex flex-col gap-1">
-                      <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">Popular Likes</span>
-                      <div className="text-xs font-bold text-white font-mono">
-                        {Math.round(state.scoringCalculations.pro.popularVote.raw)}% vs {Math.round(state.scoringCalculations.con.popularVote.raw)}%
-                      </div>
-                      <span className="text-[8px] text-gray-500">Weight: {state.scoringCalculations.pro.popularVote.weight}%</span>
+                    <div>
+                      <h2 className="text-sm font-black text-white uppercase tracking-wider">Judges' Scores & Presence Status</h2>
+                      <p className="text-[11px] text-[#64748b]">Live online/offline status, green flip active judging badges, and perspective breakdowns</p>
                     </div>
                   </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-1 bg-purple-500/10 border border-purple-500/20 text-purple-300 rounded-lg">
+                    Weight: {scoringWeights.judgeScore}%
+                  </span>
                 </div>
-              )}
 
-              {/* Deductions Event Log */}
-              <div className="flex-1 flex flex-col bg-[#101114] border border-[#1d1e24] rounded-xl p-4 overflow-hidden">
-                <h3 className="text-xs font-black tracking-wider text-gray-300 mb-3 border-b border-[#1d1e24] pb-2 uppercase shrink-0">COMPLIANCE & EVENT LOGS</h3>
-                <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
+                {/* ALL POSSIBLE JUDGES STATUS ROSTER (ONLINE & ACTIVELY JUDGING VS OFFLINE) */}
+                {(() => {
+                  const defaultRoster: JudgeAccount[] = [
+                    { id: 'j-1', username: 'judge_sarah', nickname: 'Sarah (Lead)', perspective: 'Evidence-Based', category: 'Evidence-Based', isActive: false, isSubmitted: false },
+                    { id: 'j-2', username: 'judge_david', nickname: 'David (Consensus)', perspective: 'Consensus-Based', category: 'Consensus-Based', isActive: false, isSubmitted: false },
+                    { id: 'j-3', username: 'judge_marcus', nickname: 'Marcus (Logic)', perspective: 'Intuition-Based', category: 'Intuition-Based', isActive: false, isSubmitted: false },
+                    { id: 'j-4', username: 'judge_elena', nickname: 'Elena (Wildcard)', perspective: 'Wild Card', category: 'Wild Card', isActive: false, isSubmitted: false }
+                  ];
+
+                  const effectiveJudges = (state.settings?.judgeAccounts || []).length > 0 
+                    ? state.settings.judgeAccounts 
+                    : defaultRoster;
+
+                  const onlineJudges = effectiveJudges.filter(j => j.isActive);
+                  const offlineJudges = effectiveJudges.filter(j => !j.isActive);
+
+                  const toggleJudgeStatus = (judgeId: string) => {
+                    const existing = (state.settings?.judgeAccounts || []).length > 0 
+                      ? state.settings.judgeAccounts 
+                      : defaultRoster;
+                    
+                    const updated = existing.map(j => j.id === judgeId ? { ...j, isActive: !j.isActive } : j);
+                    updateSettings({ judgeAccounts: updated });
+                  };
+
+                  return (
+                    <div className="bg-[#16171d]/90 border border-[#2d2f39] p-4 rounded-xl flex flex-col gap-4">
+                      <div className="flex items-center justify-between border-b border-[#252834] pb-2">
+                        <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                          <Users className="w-4 h-4 text-purple-400" />
+                          <span>All Possible Judges Roster ({effectiveJudges.length})</span>
+                        </span>
+                        <div className="flex items-center gap-3 text-[10px] font-mono">
+                          <span className="text-emerald-400 font-bold flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            {onlineJudges.length} Online & Actively Judging
+                          </span>
+                          <span className="text-gray-400 flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-gray-500"></span>
+                            {offlineJudges.length} Offline
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* ONLINE & ACTIVELY JUDGING SECTION */}
+                        <div className="bg-[#101114] border border-emerald-500/20 p-3 rounded-xl flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between border-b border-[#252834] pb-1.5">
+                            <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                              </span>
+                              <span>ONLINE & ACTIVELY JUDGING ({onlineJudges.length})</span>
+                            </span>
+                          </div>
+
+                          {onlineJudges.length === 0 ? (
+                            <span className="text-[11px] text-gray-500 italic py-2 text-center">No judges actively logged in.</span>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {onlineJudges.map((j) => (
+                                <div key={j.id} className="bg-[#181a24] border border-emerald-500/30 p-2.5 rounded-lg flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 flex items-center justify-center text-[10px] font-bold">
+                                      J
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-xs font-bold text-white">{j.username} {j.nickname ? `(${j.nickname})` : ''}</span>
+                                        {/* GREEN LITTLE FLIP INDICATOR */}
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.25)]">
+                                          <span className="relative flex h-1.5 w-1.5">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                                          </span>
+                                          <span className="font-mono flex items-center gap-0.5">
+                                            <span className="inline-block hover:rotate-180 transition-transform cursor-pointer text-[#34d399]" title="Actively judging">FLIP</span>
+                                            <span>ONLINE</span>
+                                          </span>
+                                        </span>
+                                      </div>
+                                      <span className="text-[9px] text-gray-400 font-mono">Perspective: {j.perspective || j.category}</span>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleJudgeStatus(j.id)}
+                                    className="px-2 py-1 text-[9px] font-bold bg-[#101114] hover:bg-gray-800 text-gray-400 hover:text-white border border-gray-700 rounded cursor-pointer transition-colors"
+                                    title="Set judge to offline"
+                                  >
+                                    Set Offline
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* OFFLINE JUDGES SECTION */}
+                        <div className="bg-[#101114] border border-[#252834] p-3 rounded-xl flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between border-b border-[#252834] pb-1.5">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-gray-500"></span>
+                              <span>OFFLINE JUDGES ({offlineJudges.length})</span>
+                            </span>
+                          </div>
+
+                          {offlineJudges.length === 0 ? (
+                            <span className="text-[11px] text-gray-500 italic py-2 text-center">All possible judges are currently online!</span>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {offlineJudges.map((j) => (
+                                <div key={j.id} className="bg-[#181a24] border border-[#2d2f39] p-2.5 rounded-lg flex items-center justify-between opacity-80 hover:opacity-100 transition-opacity">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-gray-700/50 text-gray-400 flex items-center justify-center text-[10px] font-bold">
+                                      J
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-xs font-bold text-gray-300">{j.username} {j.nickname ? `(${j.nickname})` : ''}</span>
+                                        {/* OFFLINE INDICATOR */}
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider bg-gray-500/10 text-gray-400 border border-gray-500/20 font-mono">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+                                          <span>OFFLINE</span>
+                                        </span>
+                                      </div>
+                                      <span className="text-[9px] text-gray-500 font-mono">Perspective: {j.perspective || j.category}</span>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleJudgeStatus(j.id)}
+                                    className="px-2 py-1 text-[9px] font-black bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded cursor-pointer transition-colors"
+                                    title="Simulate judge logging in online"
+                                  >
+                                    Set Online
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Perspective Accordions */}
+                <div className="flex flex-col gap-3">
+                  {[
+                    {
+                      key: 'Evidence-Based',
+                      title: 'Evidence-Based Perspective',
+                      desc: 'Prioritizes sources, data, empirical facts, and verifiable evidence.',
+                      icon: BookOpen,
+                      color: 'text-blue-400',
+                      bgColor: 'bg-blue-500/10 border-blue-500/20',
+                      defaultJudges: [
+                        { name: 'Judge 1 (Evidence)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 2 (Evidence)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 3 (Evidence)', proScore: 5.0, conScore: 5.0, isActive: false }
+                      ]
+                    },
+                    {
+                      key: 'Consensus-Based',
+                      title: 'Consensus-Based Perspective',
+                      desc: 'Prioritizes expert consensus, established knowledge, and peer agreement.',
+                      icon: Users,
+                      color: 'text-purple-400',
+                      bgColor: 'bg-purple-500/10 border-purple-500/20',
+                      defaultJudges: [
+                        { name: 'Judge 1 (Consensus)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 2 (Consensus)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 3 (Consensus)', proScore: 5.0, conScore: 5.0, isActive: false }
+                      ]
+                    },
+                    {
+                      key: 'Intuition-Based',
+                      title: 'Intuition-Based Perspective',
+                      desc: 'Prioritizes logical reasoning, convincingness, and personal interpretation.',
+                      icon: Brain,
+                      color: 'text-emerald-400',
+                      bgColor: 'bg-emerald-500/10 border-emerald-500/20',
+                      defaultJudges: [
+                        { name: 'Judge 1 (Intuition)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 2 (Intuition)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 3 (Intuition)', proScore: 5.0, conScore: 5.0, isActive: false }
+                      ]
+                    },
+                    {
+                      key: 'Wild Card',
+                      title: 'Wild Card Perspective',
+                      desc: 'Judges undecided, neutral, or evaluating from open alternative views.',
+                      icon: Sparkles,
+                      color: 'text-amber-400',
+                      bgColor: 'bg-amber-500/10 border-amber-500/20',
+                      defaultJudges: [
+                        { name: 'Judge 1 (Wild Card)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 2 (Wild Card)', proScore: 5.0, conScore: 5.0, isActive: false },
+                        { name: 'Judge 3 (Wild Card)', proScore: 5.0, conScore: 5.0, isActive: false }
+                      ]
+                    }
+                  ].map((p) => {
+                    const isExpanded = !!expandedPerspectives[p.key];
+                    const IconComp = p.icon;
+
+                    // Registered judge accounts for this perspective
+                    const matchingAccounts = (state.settings?.judgeAccounts || []).filter(
+                      j => (j.perspective || j.category) === p.key
+                    );
+
+                    // Calculate average score for Pro and Con in this perspective
+                    let proAvg = 5.0;
+                    let conAvg = 5.0;
+
+                    if (matchingAccounts.length > 0) {
+                      let proSum = 0, conSum = 0;
+                      matchingAccounts.forEach(acc => {
+                        const proB = (state.judgeBallots || []).find(b => b.judgeId === acc.id && b.team === 'PROPOSER');
+                        const conB = (state.judgeBallots || []).find(b => b.judgeId === acc.id && b.team === 'CONTRARY');
+                        const calcAvg = (b: any) => {
+                          if (!b || !b.scores) return 5.0;
+                          const vals = Object.values(b.scores) as number[];
+                          if (vals.length === 0) return 5.0;
+                          return vals.reduce((sum: number, val: number) => sum + (Number(val) || 0), 0) / vals.length;
+                        };
+                        proSum += calcAvg(proB);
+                        conSum += calcAvg(conB);
+                      });
+                      proAvg = proSum / matchingAccounts.length;
+                      conAvg = conSum / matchingAccounts.length;
+                    } else {
+                      proAvg = p.defaultJudges.reduce((acc, j) => acc + j.proScore, 0) / p.defaultJudges.length;
+                      conAvg = p.defaultJudges.reduce((acc, j) => acc + j.conScore, 0) / p.defaultJudges.length;
+                    }
+
+                    const judgesToRender = matchingAccounts.length > 0 ? matchingAccounts : p.defaultJudges;
+
+                    return (
+                      <div key={p.key} className="bg-[#16171d]/90 border border-[#2d2f39] rounded-xl overflow-hidden transition-all">
+                        {/* Perspective Header Row - Click to toggle expand */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedPerspectives(prev => ({ ...prev, [p.key]: !prev[p.key] }));
+                          }}
+                          className="w-full p-4 flex items-center justify-between hover:bg-[#1d1f29] transition-colors cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg border ${p.bgColor} ${p.color}`}>
+                              <IconComp className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-xs font-bold text-white">{p.title}</h3>
+                                <span className="text-[10px] px-1.5 py-0.2 bg-[#252834] text-gray-400 rounded font-mono">
+                                  {judgesToRender.length} Judges
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 mt-0.5">{p.desc}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-4 shrink-0">
+                            {/* Pro vs Con Perspective Averages */}
+                            <div className="flex items-center gap-3 font-mono text-xs">
+                              <span className="text-emerald-400 font-bold">{getProTeamName()}: {proAvg.toFixed(1)}/10</span>
+                              <span className="text-gray-600">vs</span>
+                              <span className="text-rose-400 font-bold">{getConTeamName()}: {conAvg.toFixed(1)}/10</span>
+                            </div>
+
+                            <div className="p-1 rounded bg-[#252834] text-gray-400">
+                              {isExpanded ? <ChevronDown className="w-4 h-4 text-white" /> : <ChevronRight className="w-4 h-4" />}
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* EXPANDED INDIVIDUAL JUDGES SECTION */}
+                        {isExpanded && (
+                          <div className="p-4 bg-[#101114] border-t border-[#2d2f39] flex flex-col gap-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">
+                                Individual Judge Ballots ({p.title})
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              {judgesToRender.map((j: any, idx: number) => {
+                                const judgeName = j.username || j.name || `Judge ${idx + 1}`;
+                                const proB = j.id ? (state.judgeBallots || []).find(b => b.judgeId === j.id && b.team === 'PROPOSER') : null;
+                                const conB = j.id ? (state.judgeBallots || []).find(b => b.judgeId === j.id && b.team === 'CONTRARY') : null;
+                                
+                                const getScore = (b: any) => {
+                                  if (!b || !b.scores) return 5.0;
+                                  const vals = Object.values(b.scores) as number[];
+                                  if (vals.length === 0) return 5.0;
+                                  return vals.reduce((acc, v) => acc + (Number(v) || 0), 0) / vals.length;
+                                };
+
+                                const proVal = j.id ? getScore(proB) : (j.proScore ?? 5.0);
+                                const conVal = j.id ? getScore(conB) : (j.conScore ?? 5.0);
+                                const isOnline = j.isActive ?? false;
+
+                                return (
+                                  <div key={idx} className={`bg-[#181a24] border ${isOnline ? 'border-emerald-500/30' : 'border-[#2d2f39]'} p-3 rounded-xl flex flex-col gap-2`}>
+                                    <div className="flex items-center justify-between border-b border-[#252834] pb-2">
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-6 h-6 rounded-full ${isOnline ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-gray-700/50 text-gray-400'} flex items-center justify-center text-[10px] font-bold`}>
+                                          J{idx + 1}
+                                        </div>
+                                        <span className="text-xs font-bold text-white">{judgeName}</span>
+                                      </div>
+                                      
+                                      {/* ONLINE OR OFFLINE INDICATOR WITH GREEN FLIP */}
+                                      {isOnline ? (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.25)]">
+                                          <span className="relative flex h-1.5 w-1.5">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                                          </span>
+                                          <span className="font-mono flex items-center gap-0.5">
+                                            <span className="inline-block hover:rotate-180 transition-transform cursor-pointer text-[#34d399]" title="Actively judging">FLIP</span>
+                                            <span>ONLINE</span>
+                                          </span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider bg-gray-500/10 text-gray-400 border border-gray-500/20 font-mono">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+                                          <span>OFFLINE</span>
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Judge scores per team */}
+                                    <div className="grid grid-cols-2 gap-2 text-center pt-1 font-mono">
+                                      <div className="bg-[#101114] p-1.5 rounded border border-emerald-500/20">
+                                        <div className="text-[9px] text-emerald-400 font-sans uppercase font-bold">{getProTeamName()}</div>
+                                        <div className="text-sm font-black text-white">{proVal.toFixed(1)} <span className="text-[9px] text-gray-500">/ 10</span></div>
+                                      </div>
+                                      <div className="bg-[#101114] p-1.5 rounded border border-rose-500/20">
+                                        <div className="text-[9px] text-rose-400 font-sans uppercase font-bold">{getConTeamName()}</div>
+                                        <div className="text-sm font-black text-white">{conVal.toFixed(1)} <span className="text-[9px] text-gray-500">/ 10</span></div>
+                                      </div>
+                                    </div>
+
+                                    {/* Evaluated Criteria Breakdown */}
+                                    <div className="flex flex-wrap gap-1 text-[8px] text-gray-400 pt-1">
+                                      <span className="bg-[#101114] px-1.5 py-0.5 rounded border border-gray-800">Reasoning: {(proB?.scores?.reasoning ?? 5).toFixed(1)}</span>
+                                      <span className="bg-[#101114] px-1.5 py-0.5 rounded border border-gray-800">Evidence: {(proB?.scores?.supported ?? 5).toFixed(1)}</span>
+                                      <span className="bg-[#101114] px-1.5 py-0.5 rounded border border-gray-800">Clarity: {(proB?.scores?.clarity ?? 5).toFixed(1)}</span>
+                                      <span className="bg-[#101114] px-1.5 py-0.5 rounded border border-gray-800">Persuasiveness: {(proB?.scores?.persuasiveness ?? 5).toFixed(1)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* SECTION 2: PENALTY SCORES BY TEAM & RUNNING SEATED ROSTER TAB */}
+              <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-4 shadow-xl">
+                <div className="flex items-center justify-between border-b border-[#1d1e24] pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
+                      <AlertOctagon className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-black text-white uppercase tracking-wider">Penalty Scores & Seated Roster Running Tab</h2>
+                      <p className="text-[11px] text-[#64748b]">Running tab of all participants who have taken a seat (Penalties persist across seat cycling)</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-1 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg">
+                    Weight: {scoringWeights.penaltyCard}%
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* PRO TEAM PENALTY TAB */}
+                  {(() => {
+                    const proEverSeated = (state.participants || []).filter(
+                      p => p.role === 'PROPOSER' && (p.isSeated || p.hasBeenSeated)
+                    );
+                    const proAvg = proEverSeated.length > 0 
+                      ? proEverSeated.reduce((acc, p) => acc + (p.score ?? 100), 0) / proEverSeated.length 
+                      : 100;
+
+                    return (
+                      <div className="bg-[#16171d]/80 border border-emerald-500/20 p-4 rounded-xl flex flex-col gap-3">
+                        <div className="flex items-center justify-between border-b border-[#2d2f39] pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                            <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                              {getProTeamName()} Seated Roster Tab ({proEverSeated.length})
+                            </h3>
+                          </div>
+                          <span className="text-xs font-mono font-black text-white">
+                            Avg: {proAvg.toFixed(1)} / 100
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-2.5 max-h-[320px] overflow-y-auto pr-1">
+                          {proEverSeated.length === 0 ? (
+                            <div className="bg-[#101114] border border-[#2d2f39] p-4 rounded-lg text-center text-xs text-gray-400">
+                              No participants have taken a seat on the {getProTeamName()} team yet.
+                              <div className="text-[10px] text-gray-500 mt-1">Starting balance: 100 pts</div>
+                            </div>
+                          ) : (
+                            proEverSeated.map((part, idx) => {
+                              const scoreVal = part.score ?? 100;
+                              return (
+                                <div key={part.id || idx} className="bg-[#101114] border border-[#2d2f39] p-3 rounded-lg flex items-center justify-between">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-6 h-6 rounded bg-[#252834] text-gray-300 flex items-center justify-center text-[10px] font-mono font-bold">
+                                      #{idx + 1}
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-white">{part.name}</span>
+                                        {part.isSeated ? (
+                                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                                            SEATED
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400">
+                                            FORMER
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[9px] text-gray-500">Starting balance: 100 pts</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <span className={`text-sm font-mono font-bold ${scoreVal >= 90 ? 'text-emerald-400' : scoreVal >= 75 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                        {scoreVal} pts
+                                      </span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updatedParticipants = state.participants.map(p => 
+                                            p.id === part.id ? { ...p, score: Math.max(0, (p.score ?? 100) - 5) } : p
+                                          );
+                                          updateStateOnServer({ participants: updatedParticipants });
+                                        }}
+                                        className="w-6 h-6 bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 text-red-400 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                                        title="Deduct 5 penalty points"
+                                      >
+                                        -
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updatedParticipants = state.participants.map(p => 
+                                            p.id === part.id ? { ...p, score: Math.min(100, (p.score ?? 100) + 5) } : p
+                                          );
+                                          updateStateOnServer({ participants: updatedParticipants });
+                                        }}
+                                        className="w-6 h-6 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 text-emerald-400 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                                        title="Restore 5 penalty points"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* CON TEAM PENALTY TAB */}
+                  {(() => {
+                    const conEverSeated = (state.participants || []).filter(
+                      p => p.role === 'CONTRARY' && (p.isSeated || p.hasBeenSeated)
+                    );
+                    const conAvg = conEverSeated.length > 0 
+                      ? conEverSeated.reduce((acc, p) => acc + (p.score ?? 100), 0) / conEverSeated.length 
+                      : 100;
+
+                    return (
+                      <div className="bg-[#16171d]/80 border border-rose-500/20 p-4 rounded-xl flex flex-col gap-3">
+                        <div className="flex items-center justify-between border-b border-[#2d2f39] pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+                            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-wider">
+                              {getConTeamName()} Seated Roster Tab ({conEverSeated.length})
+                            </h3>
+                          </div>
+                          <span className="text-xs font-mono font-black text-white">
+                            Avg: {conAvg.toFixed(1)} / 100
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-2.5 max-h-[320px] overflow-y-auto pr-1">
+                          {conEverSeated.length === 0 ? (
+                            <div className="bg-[#101114] border border-[#2d2f39] p-4 rounded-lg text-center text-xs text-gray-400">
+                              No participants have taken a seat on the {getConTeamName()} team yet.
+                              <div className="text-[10px] text-gray-500 mt-1">Starting balance: 100 pts</div>
+                            </div>
+                          ) : (
+                            conEverSeated.map((part, idx) => {
+                              const scoreVal = part.score ?? 100;
+                              return (
+                                <div key={part.id || idx} className="bg-[#101114] border border-[#2d2f39] p-3 rounded-lg flex items-center justify-between">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-6 h-6 rounded bg-[#252834] text-gray-300 flex items-center justify-center text-[10px] font-mono font-bold">
+                                      #{idx + 1}
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-white">{part.name}</span>
+                                        {part.isSeated ? (
+                                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                                            SEATED
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400">
+                                            FORMER
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[9px] text-gray-500">Starting balance: 100 pts</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <span className={`text-sm font-mono font-bold ${scoreVal >= 90 ? 'text-emerald-400' : scoreVal >= 75 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                        {scoreVal} pts
+                                      </span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updatedParticipants = state.participants.map(p => 
+                                            p.id === part.id ? { ...p, score: Math.max(0, (p.score ?? 100) - 5) } : p
+                                          );
+                                          updateStateOnServer({ participants: updatedParticipants });
+                                        }}
+                                        className="w-6 h-6 bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 text-red-400 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                                        title="Deduct 5 penalty points"
+                                      >
+                                        -
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updatedParticipants = state.participants.map(p => 
+                                            p.id === part.id ? { ...p, score: Math.min(100, (p.score ?? 100) + 5) } : p
+                                          );
+                                          updateStateOnServer({ participants: updatedParticipants });
+                                        }}
+                                        className="w-6 h-6 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 text-emerald-400 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                                        title="Restore 5 penalty points"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* SECTION 3: VIEWER CHAT VOTE & POPULAR LIKES VOTE */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* VIEWER CHAT VOTE SNAPSHOT */}
+                <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-4 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-[#1d1e24] pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                        <MessageSquare className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-black text-white uppercase tracking-wider">Viewer Chat Vote</h2>
+                        <p className="text-[11px] text-[#64748b]">Audience chat command voting split</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold px-2 py-1 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-lg">
+                      Weight: {scoringWeights.chatVote}%
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const rawProVotes = state.chatVotes?.pro ?? 0;
+                    const rawConVotes = state.chatVotes?.con ?? 0;
+                    const totalVotes = rawProVotes + rawConVotes;
+                    const proPct = totalVotes > 0 ? (rawProVotes / totalVotes) * 100 : 50;
+                    const conPct = totalVotes > 0 ? (rawConVotes / totalVotes) * 100 : 50;
+                    const proContrib = state.scoringCalculations?.pro?.chatVote?.contribution ?? (proPct * (scoringWeights.chatVote / 100));
+                    const conContrib = state.scoringCalculations?.con?.chatVote?.contribution ?? (conPct * (scoringWeights.chatVote / 100));
+
+                    return (
+                      <div className="flex flex-col gap-3">
+                        <div className="grid grid-cols-2 gap-3 font-mono text-center">
+                          <div className="bg-[#16171d]/80 border border-emerald-500/20 p-3 rounded-xl">
+                            <div className="text-[10px] text-emerald-400 font-sans font-bold uppercase">{getProTeamName()}</div>
+                            <div className="text-xl font-black text-white mt-0.5">{rawProVotes} <span className="text-xs text-gray-500 font-normal">votes</span></div>
+                            <div className="text-[10px] text-gray-400 mt-1">{proPct.toFixed(1)}% ({proContrib.toFixed(1)} pts)</div>
+                          </div>
+                          <div className="bg-[#16171d]/80 border border-rose-500/20 p-3 rounded-xl">
+                            <div className="text-[10px] text-rose-400 font-sans font-bold uppercase">{getConTeamName()}</div>
+                            <div className="text-xl font-black text-white mt-0.5">{rawConVotes} <span className="text-xs text-gray-500 font-normal">votes</span></div>
+                            <div className="text-[10px] text-gray-400 mt-1">{conPct.toFixed(1)}% ({conContrib.toFixed(1)} pts)</div>
+                          </div>
+                        </div>
+
+                        {/* Visual Split Bar */}
+                        <div className="h-2.5 w-full bg-gray-900 rounded-full overflow-hidden flex border border-[#2d2f39]">
+                          <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${proPct}%` }} />
+                          <div className="bg-rose-500 transition-all duration-500 flex-1" />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* POPULAR LIKES VOTE SNAPSHOT */}
+                <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-4 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-[#1d1e24] pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-pink-400">
+                        <Heart className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-black text-white uppercase tracking-wider">Popular Vote (Likes)</h2>
+                        <p className="text-[11px] text-[#64748b]">Total hearts and reaction engagements</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold px-2 py-1 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-lg">
+                      Weight: {scoringWeights.popularVote}%
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const rawProLikes = state.popularVotes?.pro ?? 0;
+                    const rawConLikes = state.popularVotes?.con ?? 0;
+                    const totalLikes = rawProLikes + rawConLikes;
+                    const proPct = totalLikes > 0 ? (rawProLikes / totalLikes) * 100 : 50;
+                    const conPct = totalLikes > 0 ? (rawConLikes / totalLikes) * 100 : 50;
+                    const proContrib = state.scoringCalculations?.pro?.popularVote?.contribution ?? (proPct * (scoringWeights.popularVote / 100));
+                    const conContrib = state.scoringCalculations?.con?.popularVote?.contribution ?? (conPct * (scoringWeights.popularVote / 100));
+
+                    return (
+                      <div className="flex flex-col gap-3">
+                        <div className="grid grid-cols-2 gap-3 font-mono text-center">
+                          <div className="bg-[#16171d]/80 border border-emerald-500/20 p-3 rounded-xl">
+                            <div className="text-[10px] text-emerald-400 font-sans font-bold uppercase">{getProTeamName()}</div>
+                            <div className="text-xl font-black text-white mt-0.5">{rawProLikes.toLocaleString()} <span className="text-xs text-gray-500 font-normal">likes</span></div>
+                            <div className="text-[10px] text-gray-400 mt-1">{proPct.toFixed(1)}% ({proContrib.toFixed(1)} pts)</div>
+                          </div>
+                          <div className="bg-[#16171d]/80 border border-rose-500/20 p-3 rounded-xl">
+                            <div className="text-[10px] text-rose-400 font-sans font-bold uppercase">{getConTeamName()}</div>
+                            <div className="text-xl font-black text-white mt-0.5">{rawConLikes.toLocaleString()} <span className="text-xs text-gray-500 font-normal">likes</span></div>
+                            <div className="text-[10px] text-gray-400 mt-1">{conPct.toFixed(1)}% ({conContrib.toFixed(1)} pts)</div>
+                          </div>
+                        </div>
+
+                        {/* Visual Split Bar */}
+                        <div className="h-2.5 w-full bg-gray-900 rounded-full overflow-hidden flex border border-[#2d2f39]">
+                          <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${proPct}%` }} />
+                          <div className="bg-rose-500 transition-all duration-500 flex-1" />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* COMPLIANCE & DEDUCTIONS LOG */}
+              <div className="bg-[#101114] border border-[#1d1e24] p-5 rounded-2xl flex flex-col gap-3 shadow-xl">
+                <div className="flex items-center justify-between border-b border-[#1d1e24] pb-2">
+                  <h3 className="text-xs font-black tracking-wider text-gray-300 uppercase">Compliance & Event Deduction Logs</h3>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    {state.claims.filter(c => c.speakerId === 'system').length} events logged
+                  </span>
+                </div>
+                <div className="max-h-48 overflow-y-auto pr-1 flex flex-col gap-2">
                   {state.claims.filter(c => c.speakerId === 'system').length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-[#64748b] text-xs font-semibold py-10">
+                    <div className="text-center text-gray-500 text-xs py-4 font-semibold">
                       No points deductions or penalties logged yet.
                     </div>
                   ) : (
@@ -6692,7 +7960,7 @@ export default function App() {
                       .map((log) => (
                         <div key={log.id} className="p-3 bg-[#0a0b0d] border border-red-500/15 rounded-lg flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0"></span>
                             <span className="text-xs text-gray-300 font-medium">{log.text}</span>
                           </div>
                           <span className="text-[10px] text-gray-500 font-mono font-bold shrink-0 ml-4">{log.timestamp}</span>
@@ -8443,13 +9711,24 @@ export default function App() {
                                     }`}>
                                       {judge.perspective || judge.category || 'Evidence-Based'}
                                     </span>
-                                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${
-                                      judge.isActive
-                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/15'
-                                        : 'bg-gray-500/10 text-gray-400'
-                                    }`}>
-                                      {judge.isActive ? '● ONLINE' : '● OFFLINE'}
-                                    </span>
+                                    {/* ONLINE OR OFFLINE INDICATOR WITH GREEN FLIP */}
+                                    {judge.isActive ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.25)]">
+                                        <span className="relative flex h-1.5 w-1.5">
+                                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                                        </span>
+                                        <span className="font-mono flex items-center gap-0.5">
+                                          <span className="inline-block hover:rotate-180 transition-transform cursor-pointer text-[#34d399]" title="Actively judging">FLIP</span>
+                                          <span>ONLINE</span>
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider bg-gray-500/10 text-gray-400 border border-gray-500/20 font-mono">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+                                        <span>OFFLINE</span>
+                                      </span>
+                                    )}
                                     {judge.isSubmitted && (
                                       <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-pulse">
                                         ✓ SUBMITTED
@@ -8680,135 +9959,258 @@ export default function App() {
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-black text-gray-400 uppercase">Categories & Weights</span>
-                      <button
-                        type="button"
-                        onClick={handleResetScoringSettings}
-                        className="text-[9px] font-extrabold text-[#f97316] hover:underline uppercase bg-transparent border-none cursor-pointer"
-                      >
-                        Reset to Defaults
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleAutoBalanceWeights}
+                          className="text-[9px] font-extrabold text-[#38bdf8] hover:underline uppercase bg-transparent border-none cursor-pointer"
+                          title="Auto-scale enabled category weights so they total 100%"
+                        >
+                          Auto-Balance to 100%
+                        </button>
+                        <span className="text-gray-600 text-[9px]">•</span>
+                        <button
+                          type="button"
+                          onClick={handleResetScoringSettings}
+                          className="text-[9px] font-extrabold text-[#f97316] hover:underline uppercase bg-transparent border-none cursor-pointer"
+                        >
+                          Reset Defaults
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex flex-col gap-2.5">
                       {/* Category: Judge Score */}
-                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-1.5">
+                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={scoringEnabled.judgeScore}
-                              onChange={(e) => setScoringEnabled({ ...scoringEnabled, judgeScore: e.target.checked })}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setScoringEnabled({ ...scoringEnabled, judgeScore: checked });
+                              }}
                               className="w-3.5 h-3.5 accent-[#f97316] cursor-pointer"
                             />
                             <span className="text-xs font-bold text-white">Judge Score</span>
                           </div>
                           {scoringEnabled.judgeScore && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, judgeScore: Math.max(0, scoringWeights.judgeScore - 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                -
+                              </button>
                               <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={scoringWeights.judgeScore}
-                                onChange={(e) => setScoringWeights({ ...scoringWeights, judgeScore: parseInt(e.target.value) || 0 })}
+                                onChange={(e) => setScoringWeights({ ...scoringWeights, judgeScore: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
                                 className="w-12 bg-[#101114] border border-[#2d2f39] text-xs text-white text-center rounded py-0.5 font-mono font-bold focus:outline-none focus:border-[#f97316]"
                               />
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, judgeScore: Math.min(100, scoringWeights.judgeScore + 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                +
+                              </button>
                               <span className="text-xs text-gray-400">%</span>
                             </div>
                           )}
                         </div>
+                        {scoringEnabled.judgeScore && (
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={scoringWeights.judgeScore}
+                            onChange={(e) => setScoringWeights({ ...scoringWeights, judgeScore: parseInt(e.target.value) || 0 })}
+                            className="w-full accent-[#f97316] bg-[#252834] h-1.5 rounded-lg appearance-none cursor-pointer"
+                          />
+                        )}
                         <p className="text-[9px] text-gray-400">
                           Average of perspective group averages (PRO, CON, NEUTRAL) submitting 1-10 ballots.
                         </p>
                       </div>
 
                       {/* Category: Penalty Card */}
-                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-1.5">
+                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={scoringEnabled.penaltyCard}
-                              onChange={(e) => setScoringEnabled({ ...scoringEnabled, penaltyCard: e.target.checked })}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setScoringEnabled({ ...scoringEnabled, penaltyCard: checked });
+                              }}
                               className="w-3.5 h-3.5 accent-[#f97316] cursor-pointer"
                             />
                             <span className="text-xs font-bold text-white">Penalty Card</span>
                           </div>
                           {scoringEnabled.penaltyCard && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, penaltyCard: Math.max(0, scoringWeights.penaltyCard - 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                -
+                              </button>
                               <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={scoringWeights.penaltyCard}
-                                onChange={(e) => setScoringWeights({ ...scoringWeights, penaltyCard: parseInt(e.target.value) || 0 })}
+                                onChange={(e) => setScoringWeights({ ...scoringWeights, penaltyCard: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
                                 className="w-12 bg-[#101114] border border-[#2d2f39] text-xs text-white text-center rounded py-0.5 font-mono font-bold focus:outline-none focus:border-[#f97316]"
                               />
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, penaltyCard: Math.min(100, scoringWeights.penaltyCard + 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                +
+                              </button>
                               <span className="text-xs text-gray-400">%</span>
                             </div>
                           )}
                         </div>
+                        {scoringEnabled.penaltyCard && (
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={scoringWeights.penaltyCard}
+                            onChange={(e) => setScoringWeights({ ...scoringWeights, penaltyCard: parseInt(e.target.value) || 0 })}
+                            className="w-full accent-[#f97316] bg-[#252834] h-1.5 rounded-lg appearance-none cursor-pointer"
+                          />
+                        )}
                         <p className="text-[9px] text-gray-400">
                           Seated participants' remaining scores (starts at 100, reduced on rule violations).
                         </p>
                       </div>
 
                       {/* Category: Chat Vote */}
-                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-1.5">
+                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={scoringEnabled.chatVote}
-                              onChange={(e) => setScoringEnabled({ ...scoringEnabled, chatVote: e.target.checked })}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setScoringEnabled({ ...scoringEnabled, chatVote: checked });
+                              }}
                               className="w-3.5 h-3.5 accent-[#f97316] cursor-pointer"
                             />
                             <span className="text-xs font-bold text-white">Chat Vote</span>
                           </div>
                           {scoringEnabled.chatVote && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, chatVote: Math.max(0, scoringWeights.chatVote - 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                -
+                              </button>
                               <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={scoringWeights.chatVote}
-                                onChange={(e) => setScoringWeights({ ...scoringWeights, chatVote: parseInt(e.target.value) || 0 })}
+                                onChange={(e) => setScoringWeights({ ...scoringWeights, chatVote: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
                                 className="w-12 bg-[#101114] border border-[#2d2f39] text-xs text-white text-center rounded py-0.5 font-mono font-bold focus:outline-none focus:border-[#f97316]"
                               />
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, chatVote: Math.min(100, scoringWeights.chatVote + 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                +
+                              </button>
                               <span className="text-xs text-gray-400">%</span>
                             </div>
                           )}
                         </div>
+                        {scoringEnabled.chatVote && (
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={scoringWeights.chatVote}
+                            onChange={(e) => setScoringWeights({ ...scoringWeights, chatVote: parseInt(e.target.value) || 0 })}
+                            className="w-full accent-[#f97316] bg-[#252834] h-1.5 rounded-lg appearance-none cursor-pointer"
+                          />
+                        )}
                         <p className="text-[9px] text-gray-400">
                           Viewer chat-based voting split. Calculates percentage split per round.
                         </p>
                       </div>
 
                       {/* Category: Popular Vote */}
-                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-1.5">
+                      <div className="bg-[#16171d]/60 border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={scoringEnabled.popularVote}
-                              onChange={(e) => setScoringEnabled({ ...scoringEnabled, popularVote: e.target.checked })}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setScoringEnabled({ ...scoringEnabled, popularVote: checked });
+                              }}
                               className="w-3.5 h-3.5 accent-[#f97316] cursor-pointer"
                             />
                             <span className="text-xs font-bold text-white">Popular Vote</span>
                           </div>
                           {scoringEnabled.popularVote && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, popularVote: Math.max(0, scoringWeights.popularVote - 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                -
+                              </button>
                               <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={scoringWeights.popularVote}
-                                onChange={(e) => setScoringWeights({ ...scoringWeights, popularVote: parseInt(e.target.value) || 0 })}
+                                onChange={(e) => setScoringWeights({ ...scoringWeights, popularVote: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
                                 className="w-12 bg-[#101114] border border-[#2d2f39] text-xs text-white text-center rounded py-0.5 font-mono font-bold focus:outline-none focus:border-[#f97316]"
                               />
+                              <button
+                                type="button"
+                                onClick={() => setScoringWeights({ ...scoringWeights, popularVote: Math.min(100, scoringWeights.popularVote + 5) })}
+                                className="w-5 h-5 bg-[#252834] hover:bg-[#323646] text-gray-300 rounded text-xs font-bold flex items-center justify-center cursor-pointer"
+                              >
+                                +
+                              </button>
                               <span className="text-xs text-gray-400">%</span>
                             </div>
                           )}
                         </div>
+                        {scoringEnabled.popularVote && (
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={scoringWeights.popularVote}
+                            onChange={(e) => setScoringWeights({ ...scoringWeights, popularVote: parseInt(e.target.value) || 0 })}
+                            className="w-full accent-[#f97316] bg-[#252834] h-1.5 rounded-lg appearance-none cursor-pointer"
+                          />
+                        )}
                         <p className="text-[9px] text-gray-400">
                           Social engagement split (such as likes/hearts/reactions split).
                         </p>
@@ -8816,41 +10218,56 @@ export default function App() {
                     </div>
 
                     {/* Weight Validation Status */}
-                    <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-semibold ${
-                      ((scoringEnabled.judgeScore ? scoringWeights.judgeScore : 0) +
-                       (scoringEnabled.penaltyCard ? scoringWeights.penaltyCard : 0) +
-                       (scoringEnabled.chatVote ? scoringWeights.chatVote : 0) +
-                       (scoringEnabled.popularVote ? scoringWeights.popularVote : 0)) === 100 
-                        ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' 
-                        : 'bg-red-500/10 border-red-500/25 text-red-400'
-                    }`}>
-                      <span>Total Enabled Weight:</span>
-                      <span className="font-mono">
-                        {(scoringEnabled.judgeScore ? scoringWeights.judgeScore : 0) +
-                         (scoringEnabled.penaltyCard ? scoringWeights.penaltyCard : 0) +
-                         (scoringEnabled.chatVote ? scoringWeights.chatVote : 0) +
-                         (scoringEnabled.popularVote ? scoringWeights.popularVote : 0)}% / 100%
-                      </span>
-                    </div>
+                    {(() => {
+                      const currentTotal = (scoringEnabled.judgeScore ? scoringWeights.judgeScore : 0) +
+                                           (scoringEnabled.penaltyCard ? scoringWeights.penaltyCard : 0) +
+                                           (scoringEnabled.chatVote ? scoringWeights.chatVote : 0) +
+                                           (scoringEnabled.popularVote ? scoringWeights.popularVote : 0);
+                      const isValid = currentTotal === 100;
 
-                    <button
-                      type="button"
-                      disabled={((scoringEnabled.judgeScore ? scoringWeights.judgeScore : 0) +
-                                 (scoringEnabled.penaltyCard ? scoringWeights.penaltyCard : 0) +
-                                 (scoringEnabled.chatVote ? scoringWeights.chatVote : 0) +
-                                 (scoringEnabled.popularVote ? scoringWeights.popularVote : 0)) !== 100}
-                      onClick={handleSaveScoringSettings}
-                      className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                        ((scoringEnabled.judgeScore ? scoringWeights.judgeScore : 0) +
-                         (scoringEnabled.penaltyCard ? scoringWeights.penaltyCard : 0) +
-                         (scoringEnabled.chatVote ? scoringWeights.chatVote : 0) +
-                         (scoringEnabled.popularVote ? scoringWeights.popularVote : 0)) === 100
-                          ? 'bg-[#f97316] hover:bg-[#ea580c] text-white shadow-lg shadow-[#f97316]/10'
-                          : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
-                      }`}
-                    >
-                      Save Scoring Settings
-                    </button>
+                      return (
+                        <div className="flex flex-col gap-2">
+                          <div className={`p-3 rounded-xl border text-xs flex items-center justify-between font-semibold ${
+                            isValid
+                              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' 
+                              : 'bg-amber-500/10 border-amber-500/25 text-amber-400'
+                          }`}>
+                            <div className="flex flex-col gap-0.5">
+                              <span>Total Enabled Weight</span>
+                              <span className="text-[10px] font-normal opacity-90">
+                                {isValid ? 'Ready to save!' : `Adjust weights or auto-balance to reach 100%`}
+                              </span>
+                            </div>
+                            <span className="font-mono text-sm font-bold">
+                              {currentTotal}% / 100%
+                            </span>
+                          </div>
+
+                          {!isValid && (
+                            <button
+                              type="button"
+                              onClick={handleAutoBalanceWeights}
+                              className="w-full py-1.5 bg-[#38bdf8]/15 hover:bg-[#38bdf8]/25 text-[#38bdf8] border border-[#38bdf8]/40 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              ⚡ Auto-Adjust Enabled Weights to 100%
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={!isValid}
+                            onClick={handleSaveScoringSettings}
+                            className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                              isValid
+                                ? 'bg-[#f97316] hover:bg-[#ea580c] text-white shadow-lg shadow-[#f97316]/10'
+                                : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
+                            }`}
+                          >
+                            Save Scoring Settings
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Test Mode */}
@@ -9227,6 +10644,82 @@ export default function App() {
                 >
                   Update
                 </button>
+              </div>
+
+              {/* Lobby Stage Picture Upload */}
+              <div className="border-t border-[#2d2f39] pt-3 mt-2 flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Upload className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Lobby Stage Picture (Optional)</span>
+                </label>
+                <p className="text-[10px] text-gray-500">
+                  Upload a picture to display on stage under the prompt in the Lobby phase.
+                </p>
+
+                {state.settings?.lobbyImageUrl ? (
+                  <div className="flex items-center gap-3 bg-[#0d0e10] border border-[#2d2f39] p-2.5 rounded-lg mt-1">
+                    <img 
+                      src={state.settings.lobbyImageUrl} 
+                      alt="Lobby Stage Preview" 
+                      className="w-16 h-12 object-cover rounded border border-[#2d2f39] bg-black"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-emerald-400 font-bold flex items-center gap-1">
+                        <span>✓ Image Active on Stage</span>
+                      </p>
+                      <p className="text-[10px] text-gray-400 truncate mt-0.5">
+                        Displays under prompt during Lobby phase
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateStateOnServer({
+                          settings: {
+                            ...state.settings,
+                            lobbyImageUrl: ''
+                          }
+                        });
+                      }}
+                      className="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-colors cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 mt-1">
+                    <label className="flex-1 flex items-center justify-center gap-2 bg-[#0d0e10] hover:bg-[#13151b] border border-dashed border-[#3e414f] hover:border-[#f97316] text-gray-300 hover:text-white p-3 rounded-lg cursor-pointer transition-all text-xs font-bold">
+                      <Upload className="w-4 h-4 text-[#f97316]" />
+                      <span>Upload Local Picture File...</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          if (!file.type.startsWith('image/')) {
+                            alert('Please select a valid image file.');
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            const base64 = event.target?.result as string;
+                            if (base64) {
+                              updateStateOnServer({
+                                settings: {
+                                  ...state.settings,
+                                  lobbyImageUrl: base64
+                                }
+                              });
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -10083,6 +11576,89 @@ export default function App() {
             });
           }}
         />
+      )}
+
+      {/* DISCLOSURE AGREEMENT WARNING MODAL FOR HOST */}
+      {disclosureWarningParticipant && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#101114] border-2 border-amber-500/80 rounded-2xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(245,158,11,0.3)] flex flex-col gap-4">
+            <div className="flex items-start justify-between border-b border-[#2d2f39] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-400">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-amber-400 tracking-wider uppercase font-mono">
+                    {state?.currentPhase !== 'LOBBY' ? 'Mid-Debate Seating Options' : 'Disclosure Agreement Required'}
+                  </h3>
+                  <span className="text-xs font-bold text-gray-300">
+                    Participant: {disclosureWarningParticipant.name}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setDisclosureWarningParticipant(null)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-300 leading-relaxed bg-[#16171d] p-3 rounded-lg border border-[#2d2f39]">
+              {state?.currentPhase !== 'LOBBY' ? (
+                <>
+                  <span className="text-white font-bold">{disclosureWarningParticipant.name}</span> was seated mid-debate during the <span className="text-[#f97316] font-bold">{state?.currentPhase}</span> phase. You can now play their Guidelines & Disclosure speech-to-text (TTS) or launch their opening statement on stage.
+                </>
+              ) : (
+                <>
+                  Before playing the opening statement video or advancing their presentation, <span className="text-white font-bold">{disclosureWarningParticipant.name}</span> must agree to the <span className="text-amber-400 font-semibold">Totality Talk Guidelines & AI Disclosure Notice</span>.
+                </>
+              )}
+            </p>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                onClick={() => {
+                  handleTriggerDisclosureSpeech(disclosureWarningParticipant.id);
+                  setDisclosureWarningParticipant(null);
+                }}
+                className="w-full py-2.5 px-3 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-300 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all"
+              >
+                <Volume2 className="w-4 h-4" />
+                <span>Play Disclosure Speech on Stage (TTS)</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleToggleDisclosureAgreed(disclosureWarningParticipant.id);
+                  setDisclosureWarningParticipant(null);
+                }}
+                className="w-full py-2.5 px-3 bg-emerald-500 hover:bg-emerald-600 text-black font-black rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-emerald-500/20"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Mark as "Agreed to Disclosure"</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleToggleSeated(disclosureWarningParticipant.id);
+                  setDisclosureWarningParticipant(null);
+                }}
+                className="w-full py-2.5 px-3 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all"
+              >
+                <UserX className="w-4 h-4" />
+                <span>Unseat / Decline Participant</span>
+              </button>
+
+              <button
+                onClick={() => setDisclosureWarningParticipant(null)}
+                className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Dismiss / Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

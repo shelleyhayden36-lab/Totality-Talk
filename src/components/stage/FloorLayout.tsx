@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DebateState } from '../../App';
 import StageTimer from './StageTimer';
+import { getActivePhaseTranscripts } from '../../lib/transcriptUtils';
 import { 
   Globe, 
   Mic,
@@ -17,7 +18,8 @@ interface LayoutProps {
 export default function FloorLayout({ state, formatTime }: LayoutProps) {
   // Session Transcripts directly from server state
   const session = state?.transcriptionSession || {};
-  const transcripts = session?.transcripts || [];
+  const rawTranscripts = session?.transcripts || [];
+  const transcripts = getActivePhaseTranscripts(rawTranscripts, state?.currentPhase || 'FLOOR', state?.currentRound || 'Round 1');
   const interimTranscript = session?.interimTranscript || '';
   const isRecordingSession = !!session?.isRecording;
 

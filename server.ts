@@ -2,12 +2,15 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { runResearchPipeline } from "./src/lib/researchPipeline";
 
 interface Participant {
   id: string;
   name: string;
   role: 'PROPOSER' | 'CONTRARY';
   isSeated: boolean;
+  hasBeenSeated?: boolean;
+  agreedToDisclosure?: boolean;
   isMuted: boolean;
   isSpeakerOut?: boolean;
   score: number;
@@ -167,6 +170,7 @@ interface SettingsState {
   themeColor: string;
   fontSize: 'small' | 'medium' | 'large';
   debateTopic: string;
+  lobbyImageUrl?: string;
   
   aiStatus: 'connected' | 'disconnected' | 'configuring';
   aiBotKeys: string[];
@@ -292,6 +296,7 @@ interface DebateState {
   judgeBallots?: any[];
   rules?: DebateRule[];
   violations?: Violation[];
+  activeViolationNotice?: any;
   chatVotes?: { pro: number; con: number };
   popularVotes?: { pro: number; con: number };
   scoringCalculations?: ScoringCalculations;
@@ -300,6 +305,7 @@ interface DebateState {
   debateQueue?: DebateQueue;
   showOpeningStatementPopupForParticipantId?: string | null;
   openingStatementVideoPlayingForParticipantId?: string | null;
+  activeDisclosureParticipantId?: string | null;
   introVideoPlaying?: boolean;
   showPopularVoteWidget?: boolean;
   pendingJudgeApplications?: PendingJudgeApplication[];
@@ -316,6 +322,7 @@ interface DebateState {
   closingSubPhase?: string;
   floorText?: string;
   webhookLogs?: WebhookLogEntry[];
+  seatTimers?: Record<string, { duration: number; timeLeft: number; isRunning: boolean }>;
 }
 
 let state: DebateState = {
@@ -348,8 +355,8 @@ let state: DebateState = {
     { id: 'time-warning', title: 'Time Warning', text: '30 seconds remaining for this...', isPlaying: false },
   ],
   scores: {
-    proScore: 0,
-    conScore: 0,
+    proScore: 100,
+    conScore: 100,
   },
   pendingCount: 2,
   judgeChatOpen: false,
@@ -378,6 +385,7 @@ let state: DebateState = {
     themeColor: '#f97316',
     fontSize: 'medium',
     debateTopic: 'Should social media platforms be legally held liable for user-generated content?',
+    lobbyImageUrl: '',
     promptsList: [
       'Should social media platforms be legally held liable for user-generated content?',
       'Artificial intelligence poses a greater threat than benefit to democratic societies.',
@@ -438,13 +446,13 @@ let state: DebateState = {
       popularVote: { enabled: true, weight: 10 },
       testMode: false,
       testValues: {
-        pro: { judgeScore: 8, penaltyCard: 100, chatVote: 65, popularVote: 3000 },
-        con: { judgeScore: 7, penaltyCard: 100, chatVote: 35, popularVote: 2000 }
+        pro: { judgeScore: 5, penaltyCard: 100, chatVote: 50, popularVote: 0 },
+        con: { judgeScore: 5, penaltyCard: 100, chatVote: 50, popularVote: 0 }
       }
     }
   },
-  chatVotes: { pro: 65, con: 35 },
-  popularVotes: { pro: 3000, con: 2000 },
+  chatVotes: { pro: 0, con: 0 },
+  popularVotes: { pro: 0, con: 0 },
   judgeBallots: [],
   rules: [
     {
@@ -537,9 +545,11 @@ let state: DebateState = {
     }
   ],
   violations: [],
+  activeViolationNotice: null,
   declaredWinner: null,
   showOpeningStatementPopupForParticipantId: null,
   openingStatementVideoPlayingForParticipantId: null,
+  activeDisclosureParticipantId: null,
   debateQueue: {
     currentPhase: 'LOBBY',
     currentSpeaker: null,
@@ -575,6 +585,9 @@ function loadStateFromDisk() {
           ...(saved.timer || {})
         }
       };
+      if (!state.participants || state.participants.length === 0 || state.currentPhase === 'LOBBY') {
+        state.activeViolationNotice = null;
+      }
       console.log("Successfully loaded persisted state from disk");
     }
   } catch (err) {
@@ -729,6 +742,12 @@ setInterval(() => {
   if (state.timer.isRunning) {
     if (state.timer.timeLeft > 0) {
       state.timer.timeLeft--;
+      if (state.currentSpeakerId) {
+        state.seatTimers = state.seatTimers || {};
+        state.seatTimers[state.currentSpeakerId] = {
+          ...state.timer
+        };
+      }
       
       // Auto-trigger time warning at 30 seconds
       if (state.timer.timeLeft === 30) {
@@ -843,11 +862,11 @@ async function startServer() {
       proPenaltyRaw = scoring.testValues.pro.penaltyCard;
       conPenaltyRaw = scoring.testValues.con.penaltyCard;
     } else {
-      const proSeated = s.participants.filter(p => p.role === 'PROPOSER' && p.isSeated);
+      const proSeated = s.participants.filter(p => p.role === 'PROPOSER' && (p.isSeated || p.hasBeenSeated));
       if (proSeated.length > 0) {
         proPenaltyRaw = proSeated.reduce((acc, p) => acc + (p.score ?? 100), 0) / proSeated.length;
       }
-      const conSeated = s.participants.filter(p => p.role === 'CONTRARY' && p.isSeated);
+      const conSeated = s.participants.filter(p => p.role === 'CONTRARY' && (p.isSeated || p.hasBeenSeated));
       if (conSeated.length > 0) {
         conPenaltyRaw = conSeated.reduce((acc, p) => acc + (p.score ?? 100), 0) / conSeated.length;
       }
@@ -1533,8 +1552,10 @@ async function startServer() {
   // CLEAR WEBHOOK LOGS
   app.post("/api/webhooks/clear-logs", (req, res) => {
     state.webhookLogs = [];
+    state.tikfinityEvents = [];
     updateScoringCalculations();
-    res.json({ success: true, webhookLogs: [] });
+    saveStateToDisk();
+    res.json({ success: true, webhookLogs: [], tikfinityEvents: [] });
   });
 
   // SIMULATE WEBHOOK TRIGGER
@@ -1588,6 +1609,10 @@ async function startServer() {
       state.winnerAutoSubmitDeadline = null;
     }
 
+    if (!state.participants || state.participants.length === 0 || state.currentPhase === 'LOBBY') {
+      state.activeViolationNotice = null;
+    }
+
     syncDebateQueue();
     updateScoringCalculations();
     saveStateToDisk();
@@ -1620,6 +1645,14 @@ async function startServer() {
         formalClaims: state.formalClaims || [],
         evidenceList: state.evidenceList || [],
         counterClaims: state.counterClaims || [],
+        transcriptionSession: (state as any).transcriptionSession || {
+          recordings: [],
+          transcripts: [],
+          extractedClaims: [],
+          highlights: [],
+          selectedRecordingId: null,
+          interimTranscript: ''
+        },
         scores: {
           proScore: state.scores?.proScore || 0,
           conScore: state.scores?.conScore || 0,
@@ -1643,9 +1676,15 @@ async function startServer() {
     state.evidenceList = [];
     state.counterClaims = [];
     state.tikfinityEvents = [];
+    state.webhookLogs = [];
     state.chatQuestions = [];
     state.highlightSlides = [];
     state.violations = [];
+    state.activeViolationNotice = null;
+    state.showOpeningStatementPopupForParticipantId = null;
+    state.openingStatementVideoPlayingForParticipantId = null;
+    state.introVideoPlaying = false;
+    state.popupTemplates = (state.popupTemplates || []).map(p => ({ ...p, isPlaying: false }));
     state.currentRound = 'Round 1';
     state.currentPhase = 'LOBBY';
     state.timer = { duration: 0, timeLeft: 0, isRunning: false };
@@ -1654,14 +1693,30 @@ async function startServer() {
     state.closingSubPhase = undefined;
 
     // Reset ALL live scores
-    state.scores = { proScore: 0, conScore: 0 };
+    state.scores = { proScore: 100, conScore: 100 };
     state.popularVotes = { pro: 0, con: 0 };
     state.chatVotes = { pro: 0, con: 0 };
     state.judgeBallots = [];
+    chatVotesDetail = {};
 
     // Unselect currently selected prompt
     if (state.settings) {
       state.settings.debateTopic = '';
+    }
+
+    // Clear saved audio in memory & on disk
+    audioStorageMap.clear();
+    try {
+      if (fs.existsSync(audioStorageDir)) {
+        const files = fs.readdirSync(audioStorageDir);
+        for (const file of files) {
+          try {
+            fs.unlinkSync(path.join(audioStorageDir, file));
+          } catch (e) {}
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to clear audio storage directory on reset:", err);
     }
 
     // Reset transcription session & extracted claims
@@ -1671,10 +1726,12 @@ async function startServer() {
       extractedClaims: [],
       highlights: [],
       selectedRecordingId: null,
+      interimTranscript: ''
     };
 
     // Log everyone out of remotes (judges and panelists)
     state.resetTimestamp = Date.now();
+    state.lastUpdated = Date.now();
 
     if (state.settings?.judgeAccounts) {
       state.settings.judgeAccounts = state.settings.judgeAccounts.map(j => ({
@@ -2164,11 +2221,13 @@ async function startServer() {
     res.json(state);
   });
 
-  // AI Researcher Bot endpoint
-  app.post("/api/ai/research", async (req, res) => {
-    const { claimText, prompt } = req.body;
-    const searchQuery = prompt || claimText;
-    if (!searchQuery) {
+  // AI Researcher Bot endpoint with URL Validator, Source Validator, and Claim Match Validator
+  const handleResearchRequest = async (req: express.Request, res: express.Response) => {
+    const { claimText, prompt, searchQuery: reqSearchQuery, validatorsEnabled } = req.body;
+    const searchQuery = prompt || reqSearchQuery || claimText;
+    const actualClaimText = claimText || searchQuery;
+
+    if (!actualClaimText) {
       return res.status(400).json({ error: "Either claimText or prompt is required." });
     }
 
@@ -2178,146 +2237,26 @@ async function startServer() {
         return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server. Please add it to Secrets." });
       }
 
-      // Lazy import of GoogleGenAI
-      const { GoogleGenAI, Type } = await import("@google/genai");
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          }
-        }
+      const isValidatorsEnabled = validatorsEnabled !== undefined ? Boolean(validatorsEnabled) : true;
+
+      const result = await runResearchPipeline(actualClaimText, searchQuery, apiKey, {
+        validatorsEnabled: isValidatorsEnabled,
+        maxRetries: 3,
       });
 
-      const systemInstruction = `You are an AI Researcher Bot for a live debate.
-Your job is to search the web for concrete, factual, and verified evidence regarding claims.
-You MUST assume the bias that the claim is correct and actively search for evidence that supports the claim.
-If there is no direct evidence that fully supports the claim, find evidence that partially supports the claim, and clearly label it as such using the "supportLevel" property.
-Format your response as a JSON object containing an "evidence" array.
-Each evidence item MUST have:
-1. "text": Detailed, fact-filled sentence explaining the evidence, statistics, or findings. Always include a precise, fully-qualified web URL (e.g. https://www.nytimes.com/... or https://pubmed.ncbi.nlm.nih.gov/...) in the text explaining where this fact was retrieved.
-2. "source": Name of the source publication or domain (e.g. "The Lancet", "Pew Research Center", "BBC News").
-3. "supportLevel": Must be "fully_supports" or "partially_supports". Set to "fully_supports" if the evidence fully supports the claim. If it only partially supports the claim or supports a qualified version, set to "partially_supports".
-
-CRITICAL: You must ensure that the website given for each source/URL is a real, active web page (e.g., actual reputable news sources, journals, government websites, or well-known organizations) and NOT a fake URL that would lead to a 404 page.
-
-Generate between 2 and 5 highly distinct, high-quality, real-world evidence items.`;
-
-      let response;
-      try {
-        response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: `Find supporting evidence regarding: "${claimText || searchQuery}". Assume the claim is correct and find supporting (or partially supporting) evidence.
-User query / directions: "${searchQuery}".`,
-          config: {
-            systemInstruction,
-            tools: [{ googleSearch: {} }],
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                evidence: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      text: {
-                        type: Type.STRING,
-                        description: "The concrete evidence text, describing the statistical or factual finding, including a relevant full HTTP/HTTPS URL link from the Google Search results."
-                      },
-                      source: {
-                        type: Type.STRING,
-                        description: "The name of the publishing source, e.g. 'Nature Journal' or 'World Health Organization'."
-                      },
-                      supportLevel: {
-                        type: Type.STRING,
-                        enum: ["fully_supports", "partially_supports"],
-                        description: "Whether the evidence fully supports or only partially supports the claim."
-                      }
-                    },
-                    required: ["text", "source", "supportLevel"]
-                  }
-                }
-              },
-              required: ["evidence"]
-            }
-          }
-        });
-      } catch (searchErr: any) {
-        console.log("AI Research: Google search tool was bypassed; using general knowledge synthesis.");
-        
-        response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: `Provide highly realistic and verified-style scientific/historical evidence from your parametric knowledge base supporting: "${claimText || searchQuery}". Assume the claim is correct and find supporting (or partially supporting) evidence.
-User query / directions: "${searchQuery}".`,
-          config: {
-            systemInstruction: systemInstruction + "\nNote: Since external live web search is currently unavailable, use your general knowledge. Formulate highly credible, accurate evidence items with realistic reference URLs (e.g. from Wikipedia, government databases, peer-reviewed publishers). Do NOT mention that search failed.",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                evidence: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      text: {
-                        type: Type.STRING,
-                        description: "The concrete evidence text, describing the statistical or factual finding, including a realistic and functional HTTP/HTTPS URL link."
-                      },
-                      source: {
-                        type: Type.STRING,
-                        description: "The name of the publishing source, e.g. 'Nature Journal' or 'World Health Organization'."
-                      },
-                      supportLevel: {
-                        type: Type.STRING,
-                        enum: ["fully_supports", "partially_supports"],
-                        description: "Whether the evidence fully supports or only partially supports the claim."
-                      }
-                    },
-                    required: ["text", "source", "supportLevel"]
-                  }
-                }
-              },
-              required: ["evidence"]
-            }
-          }
-        });
-      }
-
-      const responseText = response.text || "{}";
-      const parsed = JSON.parse(responseText.trim());
-      res.json(parsed);
+      res.json(result);
     } catch (err: any) {
-      console.log("AI Research: using global fallback.");
-      
-      const queryWords = (claimText || searchQuery || "").split(/\W+/).filter((w: string) => w.length > 4);
-      const kw1 = queryWords[0] || "academic research";
-      const kw2 = queryWords[1] || "industry standards";
-      const kw3 = queryWords[2] || "public policy";
-
-      const fallbackEvidence = {
-        evidence: [
-          {
-            text: `A comprehensive meta-analysis of scientific data regarding ${kw1} and ${kw2} published in the Nature Journal indicates a strong statistical correlation, suggesting significant real-world implications. Source: https://www.nature.com/articles/s41562-meta-analysis-report/`,
-            source: "Nature Journal",
-            supportLevel: "fully_supports"
-          },
-          {
-            text: `Expert articles published by the Brookings Institution suggest that policy structures addressing ${kw2} are most effective when paired with transparent independent oversight. Source: https://www.brookings.edu/research/policy-directions-for-${kw2.toLowerCase()}/`,
-            source: "Brookings Institution",
-            supportLevel: "partially_supports"
-          },
-          {
-            text: `A public sentiment survey conducted by the Pew Research Center indicates that public awareness and concern regarding ${kw3} has increased by over 35% in the last three years. Source: https://www.pewresearch.org/topics/${kw3.toLowerCase()}-and-public-sentiment/`,
-            source: "Pew Research Center",
-            supportLevel: "fully_supports"
-          }
-        ]
-      };
-      res.json(fallbackEvidence);
+      console.error("AI Research Pipeline error:", err);
+      res.status(500).json({
+        error: err.message || "An error occurred during research verification.",
+        evidence: [],
+        message: "No verified supporting evidence found."
+      });
     }
-  });
+  };
+
+  app.post("/api/ai/research", handleResearchRequest);
+  app.post("/api/ai-researcher", handleResearchRequest);
 
   // Source quality cache for AI Evidence Judge
   const sourceEvaluationsCache = new Map<string, { source_quality: string; source_score: number }>();
@@ -2757,9 +2696,29 @@ Perform a rigorous evaluation and output exactly the specified JSON structure.`;
 
   // AI Transcription & Claim Extraction endpoint
   app.post("/api/transcription/extract-claims", async (req, res) => {
-    const { transcripts, seatedPanelists } = req.body;
+    const { transcripts, currentPhase, seatedPanelists } = req.body;
     if (!transcripts || !Array.isArray(transcripts) || transcripts.length === 0) {
       return res.status(400).json({ error: "Transcripts array is required." });
+    }
+
+    const isClaimPhase = (p?: string) => {
+      if (!p) return true;
+      const upper = p.toUpperCase();
+      return upper.includes("OPEN") || upper.includes("REBUT");
+    };
+
+    // Filter transcripts to Opening Statements & Rebuttal phases only
+    const claimTranscripts = transcripts.filter((t: any) => {
+      const p = (t.phaseId || t.phaseName || t.phase || "").toUpperCase();
+      if (!p) return true;
+      return isClaimPhase(p);
+    });
+
+    if (claimTranscripts.length === 0 || (currentPhase && !isClaimPhase(currentPhase))) {
+      return res.json({
+        claims: [],
+        note: "Claims are only extracted during Opening Statements and Rebuttal phases. Cross-Examination, Chat Questions, Highlights, Lobby, and Closing phases are excluded."
+      });
     }
 
     try {
@@ -2778,9 +2737,12 @@ Perform a rigorous evaluation and output exactly the specified JSON structure.`;
         }
       });
 
-      const rawTranscriptText = transcripts.map((t: any) => `[${t.formattedTime || '00:00'}] ${t.speaker || 'Speaker'}: ${t.text}`).join("\n");
+      const rawTranscriptText = claimTranscripts.map((t: any) => `[${t.formattedTime || '00:00'}] ${t.speaker || 'Speaker'}: ${t.text}`).join("\n");
 
       const prompt = `Analyze the following debate transcript and extract all distinct, explicit debate claims or factual assertions made by speakers.
+
+STRICT PHASE RULE: You MUST ONLY extract claims made during Opening Statements or Rebuttal speech phases.
+Do NOT extract claims from cross-examination, chat questions, lobby chatter, highlights, or closing statements.
 CRITICAL CONSTRAINT: Do NOT invent, paraphrase wildly, or fabricate claims. Only extract assertions explicitly stated in the transcript text.
 
 For each extracted claim, provide:
@@ -3026,10 +2988,15 @@ ${rawTranscriptText}`;
 
   // AI Transcribe Saved Audio & Extract Claims
   app.post("/api/transcription/transcribe-audio", async (req, res) => {
-    const { audioDataUri, title, seatedPanelists } = req.body;
+    const { audioDataUri, title, currentPhase, seatedPanelists } = req.body;
     if (!audioDataUri) {
       return res.status(400).json({ error: "audioDataUri parameter is required." });
     }
+
+    const isClaimPhaseActive = !currentPhase || (
+      currentPhase.toUpperCase().includes("OPEN") || 
+      currentPhase.toUpperCase().includes("REBUT")
+    );
 
     try {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -3074,22 +3041,32 @@ ${rawTranscriptText}`;
         } else {
           return res.status(404).json({ error: "Audio recording file not found on server." });
         }
-      } else {
-        const match = audioDataUri.match(/^data:(audio\/[a-zA-Z0-9\-\+]+);base64,(.+)$/);
+      } else if (typeof audioDataUri === 'string') {
+        const match = audioDataUri.match(/^data:([^;]+);base64,(.+)$/);
         if (match) {
           mimeType = match[1];
           base64Data = match[2];
         } else if (audioDataUri.includes("base64,")) {
-          base64Data = audioDataUri.split("base64,")[1];
+          const parts = audioDataUri.split("base64,");
+          base64Data = parts[1];
+          if (parts[0].includes("data:")) {
+            mimeType = parts[0].replace("data:", "").replace(";", "").trim();
+          }
         } else {
           base64Data = audioDataUri;
         }
       }
 
+      // Clean up mimeType for Gemini API (strip parameters like ;codecs=opus)
+      let cleanMimeType = (mimeType || "audio/webm").split(";")[0].trim().toLowerCase();
+      if (!cleanMimeType.startsWith("audio/")) {
+        cleanMimeType = "audio/webm";
+      }
+
       const prompt = `Listen to this debate audio recording ("${title || "Saved Recording"}").
 Tasks:
 1. Transcribe the speech line-by-line with accurate timestamps and likely speaker names.
-2. Extract all distinct explicit debate claims or factual assertions made in the recording.
+2. Extract all distinct explicit debate claims or factual assertions made in the recording ONLY IF this audio is from Opening Statements or Rebuttal phases. If this recording is from Cross-Examination, Chat Questions, Highlights, Lobby, or Closing statements, do NOT extract claims and return an empty claims array [].
 
 Do NOT fabricate claims. Only extract assertions explicitly stated in the speech.`;
 
@@ -3098,11 +3075,13 @@ Do NOT fabricate claims. Only extract assertions explicitly stated in the speech
         contents: [
           {
             inlineData: {
-              mimeType: mimeType,
-              data: base64Data,
+              mimeType: cleanMimeType,
+              data: base64Data.trim().replace(/[\r\n\s]/g, ""),
             }
           },
-          prompt
+          {
+            text: prompt
+          }
         ],
         config: {
           responseMimeType: "application/json",
@@ -3143,6 +3122,9 @@ Do NOT fabricate claims. Only extract assertions explicitly stated in the speech
       });
 
       const parsed = JSON.parse(response.text || "{}");
+      if (!isClaimPhaseActive) {
+        parsed.claims = [];
+      }
       return res.json(parsed);
     } catch (err: any) {
       console.log("AI Audio Transcription Fallback activated:", err.message);

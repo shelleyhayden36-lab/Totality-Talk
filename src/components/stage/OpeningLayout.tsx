@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DebateState } from '../../App';
 import StageTimer from './StageTimer';
+import { getActivePhaseTranscripts } from '../../lib/transcriptUtils';
 import { 
   Mic, 
   CheckCircle2, 
@@ -40,18 +41,57 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
 
   // Session Transcripts & Live Recording State directly from server state
   const session = state?.transcriptionSession;
-  const transcripts = session?.transcripts || [];
+  const rawTranscripts = session?.transcripts || [];
+  const phaseTranscripts = getActivePhaseTranscripts(rawTranscripts, state?.currentPhase || 'OPENING', state?.currentRound || 'Round 1');
+  
+  const activeSpeakerId = state.showOpeningStatementPopupForParticipantId || state.currentSpeakerId;
+
+  // Track starting transcript index when current speaker/seat turn changes
+  const speakerTurnStartRef = useRef<{ speakerId: string | null; offset: number }>({
+    speakerId: activeSpeakerId || null,
+    offset: rawTranscripts.length
+  });
+
+  useEffect(() => {
+    if (speakerTurnStartRef.current.speakerId !== activeSpeakerId) {
+      speakerTurnStartRef.current = {
+        speakerId: activeSpeakerId || null,
+        offset: rawTranscripts.length
+      };
+    }
+  }, [activeSpeakerId]);
+
+  // Check server-provided turn start index for this speaker/seat, falling back to local turn start
+  const serverStartIdx = activeSpeakerId ? session?.speakerTurnStartIndices?.[activeSpeakerId] : undefined;
+  const startOffset = typeof serverStartIdx === 'number'
+    ? serverStartIdx
+    : speakerTurnStartRef.current.offset;
+
+  // Filter transcripts so teleprompter ONLY shows new transcript items recorded for THIS opening statement session/seat
+  const transcripts = phaseTranscripts.filter((t) => {
+    const rawIndex = rawTranscripts.indexOf(t);
+    return rawIndex >= startOffset;
+  });
+
   const interimTranscript = session?.interimTranscript || '';
   const isRecordingSession = !!session?.isRecording;
   const selectedRecordingId = session?.selectedRecordingId;
 
-  // Show teleprompter whenever actively recording OR when a recording is selected OR when transcripts exist
-  const hasLiveSpeech = isRecordingSession || !!selectedRecordingId || transcripts.length > 0 || !!interimTranscript;
+  // Teleprompter automatically displays live speech during Opening Statements (no manual record button required)
+  const hasLiveSpeech = true;
 
   const [isUserHovering, setIsUserHovering] = useState(false);
 
   // Auto-scroll teleprompter container
   const teleprompterRef = useRef<HTMLDivElement>(null);
+
+  // Instantly pick up where left off (scroll to bottom) on mount, speaker change, or new text
+  useEffect(() => {
+    const container = teleprompterRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [activeSpeakerId, transcripts.length, interimTranscript]);
 
   // Slow cinematic crawl for teleprompter
   useEffect(() => {
@@ -70,15 +110,15 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
     return () => clearInterval(scrollInterval);
   }, [transcripts, isUserHovering]);
 
-  // Keep scroll position smooth when new speech segments arrive during active recording
+  // Keep scroll position smooth at bottom when new speech segments arrive during active recording
   useEffect(() => {
-    if (teleprompterRef.current && !isUserHovering && isRecordingSession) {
+    if (teleprompterRef.current && !isUserHovering) {
       teleprompterRef.current.scrollTo({
         top: teleprompterRef.current.scrollHeight,
         behavior: 'smooth'
       });
     }
-  }, [transcripts.length, isRecordingSession]);
+  }, [transcripts.length, interimTranscript, isRecordingSession, isUserHovering]);
 
   return (
     <div className="flex flex-col w-full h-full text-left select-none p-2 sm:p-3 relative bg-[#060709] text-white justify-between overflow-hidden">
@@ -157,10 +197,11 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
                     "{interimTranscript}..."
                   </motion.p>
                 )}
-                {isRecordingSession && transcripts.length === 0 && !interimTranscript && (
+                {transcripts.length === 0 && !interimTranscript && (
                   <div className="flex flex-col items-center justify-center py-12 text-center text-cyan-400">
-                    <Mic className="w-8 h-8 animate-pulse mb-2" />
-                    <p className="text-lg font-bold">Listening... Speak into microphone or computer audio input.</p>
+                    <Mic className="w-8 h-8 animate-pulse mb-2 text-cyan-400" />
+                    <p className="text-lg font-bold text-white">Live Teleprompter Listening</p>
+                    <p className="text-xs sm:text-sm text-cyan-300/80 mt-1 max-w-md">Speech recognition is active live. Speak into your microphone and transcriptions will stream here automatically.</p>
                   </div>
                 )}
               </div>

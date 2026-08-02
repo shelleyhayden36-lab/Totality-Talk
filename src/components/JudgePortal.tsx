@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { playPenaltyBuzzerSound } from '../utils/audio';
 import { 
   Radio, 
   Clock, 
@@ -426,6 +427,9 @@ export default function JudgePortal({ state, onStateUpdate, formatTime }: JudgeP
   // Handle penalty adjustments
   const handlePenaltyChange = (delta: number) => {
     if (!activeJudge || isSubmitted) return;
+    if (delta > 0) {
+      playPenaltyBuzzerSound();
+    }
 
     setDraftBallots(prev => prev.map(b => {
       if (b.team === selectedTeam && b.seat === selectedSeat) {

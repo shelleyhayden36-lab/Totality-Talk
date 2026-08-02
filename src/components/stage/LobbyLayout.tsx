@@ -1,48 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { DebateState } from '../../App';
+import { DebateState, DEFAULT_DEBATE_RULES } from '../../App';
 
 interface LayoutProps {
   state: DebateState;
   formatTime: (seconds: number) => string;
 }
 
-const DEFAULT_DEBATE_RULES = [
-  {
-    id: 'rule-attack',
-    name: 'No Personal Attacks',
-    description: 'Ad hominem attacks, insults, or demeaning personal remarks directed at other participants.',
-    enabled: true
-  },
-  {
-    id: 'rule-well',
-    name: 'No Poisoning the Well',
-    description: "Preemptively dismissing or attacking an opponent's character or source before they can speak.",
-    enabled: true
-  },
-  {
-    id: 'rule-hate',
-    name: 'No Hate Speech',
-    description: 'Any speech attacking, demeaning, or inciting violence against protected groups or individuals.',
-    enabled: true
-  },
-  {
-    id: 'rule-interrupt',
-    name: 'No Interrupting',
-    description: "Speaking out of turn or interrupting another participant's designated speaking time.",
-    enabled: true
-  },
-  {
-    id: 'rule-topic',
-    name: 'Stay On Topic',
-    description: 'Failing to address the debate topic or drifting into unrelated issues.',
-    enabled: true
-  }
-];
-
 interface LobbySlide {
   id: string;
-  type: 'prompt' | 'team' | 'rules';
+  type: 'team' | 'rules';
   duration: number; // in milliseconds
   title: string;
   badgeText?: string;
@@ -51,7 +18,9 @@ interface LobbySlide {
   teamType?: 'PROPOSER' | 'CONTRARY';
   teamLabel?: string;
   members?: DebateState['participants'];
-  rulesPair?: typeof DEFAULT_DEBATE_RULES;
+  rule?: typeof DEFAULT_DEBATE_RULES[0];
+  ruleIndex?: number;
+  totalRules?: number;
 }
 
 export default function LobbyLayout({ state, formatTime }: LayoutProps) {
@@ -68,107 +37,51 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
   // Load ground rules from state, filter to enabled ones
   const rulesList = (state.rules || DEFAULT_DEBATE_RULES).filter(r => r.enabled !== false);
 
-  // Construct structured slideshow sequence:
-  // 1. Prompt (30s)
-  // 2. Team Affirmative (10s)
-  // 3. Rules 1 & 2 (10s)
-  // 4. Prompt (30s)
-  // 5. Team Opposition (10s)
-  // 6. Rules 3 & 4 (10s)
-  // 7. Prompt (30s) ... and repeat cycle!
+  // Construct structured slideshow sequence for team spots & rules (prompt is ALWAYS visible at top)
   const slides: LobbySlide[] = [];
 
-  // Helper to push prompt slide
-  const pushPrompt = (idx: number) => {
-    slides.push({
-      id: `prompt-${idx}`,
-      type: 'prompt',
-      duration: 30000, // 30 seconds as requested
-      title: 'DEBATE TOPIC & PROMPT',
-      badgeText: 'OPEN DEBATE'
-    });
-  };
-
-  // 1. Initial Prompt
-  pushPrompt(1);
-
-  // 2. Team Proposer
+  // 1. Team Affirmative (Proposer) Roster
   slides.push({
     id: 'team-pro',
     type: 'team',
-    duration: 10000,
+    duration: 12000,
     teamType: 'PROPOSER',
-    title: `TEAM ${proTeamLabel.toUpperCase()}`,
+    title: `TEAM ${proTeamLabel.toUpperCase()} ROSTER`,
     teamLabel: proTeamLabel,
     colorClass: 'text-blue-400',
     borderColorClass: 'border-blue-500/30',
     members: seatedPro
   });
 
-  // 3. Rules 1 & 2
-  if (rulesList.length > 0) {
-    slides.push({
-      id: 'rules-1-2',
-      type: 'rules',
-      duration: 10000,
-      title: 'DEBATE GROUND RULES (01 - 02)',
-      rulesPair: rulesList.slice(0, 2)
-    });
-  }
-
-  // 4. Prompt again
-  pushPrompt(2);
-
-  // 5. Team Opposition
+  // 2. Team Opposition (Contrary) Roster
   slides.push({
     id: 'team-con',
     type: 'team',
-    duration: 10000,
+    duration: 12000,
     teamType: 'CONTRARY',
-    title: `TEAM ${conTeamLabel.toUpperCase()}`,
+    title: `TEAM ${conTeamLabel.toUpperCase()} ROSTER`,
     teamLabel: conTeamLabel,
     colorClass: 'text-red-400',
     borderColorClass: 'border-red-500/30',
     members: seatedCon
   });
 
-  // 6. Rules 3 & 4 (or remaining)
-  if (rulesList.length > 2) {
+  // 3. Individual Ground Rules (One single rule per slide for clean readability)
+  rulesList.forEach((rule, idx) => {
     slides.push({
-      id: 'rules-3-4',
+      id: `rule-${rule.id || idx}`,
       type: 'rules',
-      duration: 10000,
-      title: 'DEBATE GROUND RULES (03 - 04)',
-      rulesPair: rulesList.slice(2, 4)
+      duration: 8000,
+      title: `DEBATE GROUND RULE (0${idx + 1} / 0${rulesList.length})`,
+      rule,
+      ruleIndex: idx + 1,
+      totalRules: rulesList.length
     });
-  } else if (rulesList.length > 0) {
-    slides.push({
-      id: 'rules-all',
-      type: 'rules',
-      duration: 10000,
-      title: 'DEBATE GROUND RULES',
-      rulesPair: rulesList
-    });
-  }
-
-  // 7. Prompt again
-  pushPrompt(3);
-
-  // 8. Rules 5+ if available
-  if (rulesList.length > 4) {
-    slides.push({
-      id: 'rules-5-plus',
-      type: 'rules',
-      duration: 10000,
-      title: 'DEBATE GROUND RULES (05+)',
-      rulesPair: rulesList.slice(4)
-    });
-    pushPrompt(4);
-  }
+  });
 
   const [activeSlideIndex, setActiveSlideIndex] = useState(0);
 
-  // Cycle interval timer based on the current active slide's duration
+  // Cycle interval timer based on current active slide's duration
   useEffect(() => {
     if (slides.length <= 1) return;
     const currentSlide = slides[activeSlideIndex] || slides[0];
@@ -183,10 +96,13 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
 
   const currentSlide = slides[activeSlideIndex] || slides[0];
 
+  const proSeatsMax = state.settings?.proSeatsCount ?? 3;
+  const conSeatsMax = state.settings?.conSeatsCount ?? 3;
+
   return (
-    <div className="flex flex-col w-full h-full text-left select-none p-5 relative bg-[#07080a] text-white justify-between overflow-hidden">
+    <div className="flex flex-col w-full h-full text-left select-none p-4 sm:p-5 relative bg-[#07080a] text-white justify-between overflow-hidden gap-3">
       
-      {/* 1. COMPACT HEADER SECTION */}
+      {/* 1. TOP HEADER SECTION */}
       <div className="flex flex-col shrink-0">
         <div className="flex items-center justify-between w-full">
           {/* TRUTH · RESPECT · PERSPECTIVE Slogan */}
@@ -215,7 +131,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
         </div>
 
         {/* Smaller Lobby Standby Header */}
-        <div className="flex items-center justify-between mt-2.5">
+        <div className="flex items-center justify-between mt-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-black text-gray-300 tracking-wider uppercase bg-[#14161f] border border-gray-800/80 px-2.5 py-1 rounded-lg">
               LOBBY <span className="text-blue-500">STANDBY</span>
@@ -227,169 +143,373 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
         </div>
 
         {/* Custom Horizontal Divider */}
-        <div className="w-full border-b border-gray-800/40 mt-2.5" />
+        <div className="w-full border-b border-gray-800/40 mt-2" />
       </div>
 
-      {/* 2. DYNAMIC MAIN HERO SLIDESHOW ("WHERE THE PROMPT IS") */}
-      <div className="flex-1 flex flex-col justify-center my-3 relative min-h-[220px]">
-        <AnimatePresence mode="wait">
-          <motion.div 
-            key={currentSlide.id}
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -12, scale: 0.98 }}
-            transition={{ duration: 0.45, ease: 'easeOut' }}
-            className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-blue-500/20 p-5 rounded-2xl shadow-2xl relative overflow-hidden group backdrop-blur-md h-full flex flex-col justify-between"
-          >
-            {/* Ambient Background Glow based on slide type */}
-            <div className={`absolute -top-12 -right-12 w-36 h-36 rounded-full blur-3xl pointer-events-none ${
-              currentSlide.type === 'team'
-                ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500/15' : 'bg-red-500/15'
-                : currentSlide.type === 'rules' ? 'bg-amber-500/15' : 'bg-blue-500/15'
-            }`}></div>
+      {/* 2. ALWAYS VISIBLE DEBATE PROMPT HEADER (TOP OF MAIN BODY) */}
+      <div className="bg-gradient-to-r from-[#12141c] via-[#161926] to-[#12141c] border border-blue-500/30 p-3 sm:p-3.5 rounded-xl shadow-xl text-center shrink-0 relative overflow-hidden">
+        <div className="flex items-center justify-center gap-2 mb-0.5">
+          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+          <span className="text-[10px] font-black tracking-widest text-blue-400 uppercase">
+            DEBATE TOPIC & PROMPT
+          </span>
+        </div>
+        <p className="text-sm sm:text-base md:text-lg font-black text-white leading-tight tracking-tight max-w-4xl mx-auto">
+          "{debateTopic}"
+        </p>
+      </div>
 
-            {/* Slide Top Bar */}
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full animate-pulse ${
-                  currentSlide.type === 'team'
-                    ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
-                    : currentSlide.type === 'rules' ? 'bg-amber-500' : 'bg-blue-500'
-                }`}></span>
-                <span className={`text-[11px] font-black tracking-widest uppercase ${
-                  currentSlide.type === 'team'
-                    ? currentSlide.teamType === 'PROPOSER' ? 'text-blue-400' : 'text-red-400'
-                    : currentSlide.type === 'rules' ? 'text-amber-400' : 'text-blue-400'
-                }`}>
-                  {currentSlide.title}
-                </span>
+      {/* 3. MAIN CONTENT BODY: SIDE-BY-SIDE SPLIT FORMAT FOR IMAGE & SLIDESHOW */}
+      <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
+        {state.settings?.lobbyImageUrl ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 h-full min-h-0 items-stretch">
+            {/* LEFT COLUMN: HOLOGRAPHIC STAGE IMAGE PROJECTION */}
+            <motion.div 
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="relative flex flex-col justify-center items-center rounded-xl overflow-hidden border border-blue-500/40 shadow-[0_0_25px_rgba(59,130,246,0.25)] bg-black/80 p-2.5 h-full min-h-[180px]"
+            >
+              {/* Image Container with contain fit */}
+              <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-lg">
+                <img 
+                  src={state.settings.lobbyImageUrl} 
+                  alt="Lobby Stage Visual" 
+                  className="w-full h-full object-cover rounded-lg block"
+                />
+
+                {/* HOLOGRAM SCANLINE LASER SWEEP OVERLAY */}
+                <motion.div 
+                  className="absolute inset-0 pointer-events-none z-10"
+                  style={{
+                    background: 'linear-gradient(to bottom, transparent 0%, rgba(59, 130, 246, 0.45) 50%, transparent 100%)',
+                    height: '25%',
+                  }}
+                  animate={{ top: ['-30%', '100%'] }}
+                  transition={{ duration: 3.2, repeat: Infinity, ease: 'linear' }}
+                />
+
+                {/* SUBTLE HORIZONTAL HUD SCREEN TEXTURE GRID LINES */}
+                <div 
+                  className="absolute inset-0 pointer-events-none opacity-30 z-10 rounded-lg"
+                  style={{
+                    backgroundImage: 'linear-gradient(to bottom, rgba(59, 130, 246, 0.3) 1px, transparent 1px)',
+                    backgroundSize: '100% 4px'
+                  }}
+                />
+
+                {/* LIGHT CHROMATIC REFLECTION SWEEP */}
+                <motion.div
+                  className="absolute inset-0 pointer-events-none z-10 bg-gradient-to-tr from-transparent via-cyan-300/15 to-transparent rounded-lg"
+                  animate={{ opacity: [0.15, 0.4, 0.15] }}
+                  transition={{ duration: 3.5, repeat: Infinity, ease: 'easeInOut' }}
+                />
               </div>
 
-              {/* Animated OPEN DEBATE / LIVE Tag */}
-              <motion.div 
-                animate={{ scale: [1, 1.05, 1], opacity: [0.8, 1, 0.8] }}
-                transition={{ repeat: Infinity, duration: 2 }}
-                className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[9px] font-extrabold text-blue-300 uppercase tracking-wider"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>OPEN DEBATE</span>
-              </motion.div>
-            </div>
 
-            {/* SLIDE CONTENT AREA */}
-            <div className="my-auto py-2">
-              {/* TYPE 1: PROMPT SLIDE */}
-              {currentSlide.type === 'prompt' && (
-                <div>
-                  <p className="text-[19px] sm:text-[21px] font-black text-white leading-snug tracking-tight my-1">
-                    "{debateTopic}"
-                  </p>
-                </div>
-              )}
 
-              {/* TYPE 2: TEAM ROSTER SLIDE */}
-              {currentSlide.type === 'team' && (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Seated Participants Lineup
-                    </span>
-                    <span className="text-[10px] font-black text-gray-400 uppercase">
-                      {currentSlide.members?.length || 0} Speakers
+              {/* CORNER HUD TECH ACCENTS */}
+              <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-blue-400/80 z-20 pointer-events-none" />
+              <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-blue-400/80 z-20 pointer-events-none" />
+              <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-blue-400/80 z-20 pointer-events-none" />
+              <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-blue-400/80 z-20 pointer-events-none" />
+            </motion.div>
+
+            {/* RIGHT COLUMN: SCROLLING TEAM SPOTS & ROLES CYCLING SECTION */}
+            <div className="h-full min-h-0 flex flex-col justify-center relative">
+              <AnimatePresence mode="wait">
+                <motion.div 
+                  key={currentSlide?.id || 'default-slide'}
+                  initial={{ opacity: 0, y: 8, scale: 0.99 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.99 }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-blue-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
+                >
+                  {/* Ambient Glow */}
+                  <div className={`absolute -top-10 -right-10 w-28 h-28 rounded-full blur-3xl pointer-events-none ${
+                    currentSlide?.type === 'team'
+                      ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500/15' : 'bg-red-500/15'
+                      : 'bg-amber-500/15'
+                  }`}></div>
+
+                  {/* Slide Bar Header */}
+                  <div className="flex items-center justify-between mb-2 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full animate-pulse ${
+                        currentSlide?.type === 'team'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                          : 'bg-amber-500'
+                      }`}></span>
+                      <span className={`text-[11px] font-black tracking-widest uppercase ${
+                        currentSlide?.type === 'team'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'text-blue-400' : 'text-red-400'
+                          : 'text-amber-400'
+                      }`}>
+                        {currentSlide?.title}
+                      </span>
+                    </div>
+
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                      {currentSlide?.type === 'team' ? 'Team Roster Lineup' : 'Rulebook'}
                     </span>
                   </div>
 
-                  {currentSlide.members && currentSlide.members.length > 0 ? (
-                    <div className="flex flex-wrap gap-2 mt-1 max-h-[100px] overflow-y-auto">
-                      {currentSlide.members.map((p, i) => (
-                        <div 
-                          key={p.id}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold ${
-                            currentSlide.teamType === 'PROPOSER'
-                              ? 'bg-blue-950/40 border-blue-500/30 text-blue-200'
-                              : 'bg-red-950/40 border-red-500/30 text-red-200'
-                          }`}
-                        >
-                          <span className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-black">
-                            {i + 1}
+                  {/* SLIDE INNER CONTENT */}
+                  <div className="my-auto py-1 flex-1 flex flex-col justify-center min-h-0">
+                    {/* TYPE: TEAM ROSTER SPOTS */}
+                    {currentSlide?.type === 'team' && (
+                      <div className="flex flex-col gap-2.5 h-full justify-center">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-blue-400' : 'bg-red-400'}`}></span>
+                            <span>{currentSlide.teamLabel} Speaker Lineup</span>
                           </span>
-                          <span>{p.name}</span>
+                          <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded border ${
+                            currentSlide.teamType === 'PROPOSER' 
+                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                              : 'bg-red-500/10 text-red-400 border-red-500/20'
+                          }`}>
+                            {currentSlide.members?.length || 0} / {currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax} Seated
+                          </span>
                         </div>
-                      ))}
+
+                        {/* Spots Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 my-auto">
+                          {Array.from({ length: currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax }).map((_, idx) => {
+                            const member = currentSlide.members?.[idx];
+                            return (
+                              <div 
+                                key={idx}
+                                className={`p-3 rounded-xl border flex flex-col justify-between min-h-[60px] ${
+                                  member 
+                                    ? currentSlide.teamType === 'PROPOSER'
+                                      ? 'bg-blue-950/40 border-blue-500/40 text-blue-200'
+                                      : 'bg-red-950/40 border-red-500/40 text-red-200'
+                                    : 'bg-[#10121a]/50 border-dashed border-gray-800 text-gray-500'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                                    Speaker {idx + 1}
+                                  </span>
+                                  <span className={`w-2 h-2 rounded-full ${member ? 'bg-emerald-400' : 'bg-gray-700'}`}></span>
+                                </div>
+                                {member ? (
+                                  <span className="text-xs font-black text-white truncate mt-1">
+                                    {member.name}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-bold italic text-gray-600 mt-1">
+                                    Open Spot
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TYPE: SINGLE RULE SLIDE */}
+                    {currentSlide?.type === 'rules' && currentSlide.rule && (
+                      <div className="flex flex-col items-center justify-center text-center p-3 sm:p-4 my-auto h-full">
+                        <div className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-black mb-1.5 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
+                          0{currentSlide.ruleIndex}
+                        </div>
+                        <h4 className="text-sm sm:text-base font-black text-amber-300 uppercase tracking-wider mb-1">
+                          {currentSlide.rule.name}
+                        </h4>
+                        <p className="text-xs sm:text-sm text-gray-200 font-medium leading-relaxed max-w-xl mx-auto">
+                          {currentSlide.rule.description}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Slide Footer Info Bar */}
+                  <div className="pt-2 border-t border-gray-800/40 flex items-center justify-between text-[10px] text-gray-400 font-bold shrink-0">
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-gray-500 uppercase tracking-wider">Status:</span>
+                      <span className="text-emerald-400 font-black uppercase">Waiting for Speakers</span>
+                    </span>
+                    <span className="text-gray-500 uppercase tracking-wider">
+                      {seatedPro.length + seatedCon.length} / {proSeatsMax + conSeatsMax} Total Seated
+                    </span>
+                  </div>
+
+                  {/* Slide Timer Countdown Progress Bar */}
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-900 overflow-hidden">
+                    <motion.div 
+                      key={activeSlideIndex}
+                      initial={{ width: "0%" }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: (currentSlide?.duration || 10000) / 1000, ease: "linear" }}
+                      className={`h-full ${
+                        currentSlide?.type === 'team'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                          : 'bg-amber-500'
+                      }`}
+                    />
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </div>
+        ) : (
+          /* FULL WIDTH SLIDESHOW CARD WHEN NO IMAGE */
+          <div className="h-full min-h-0 flex flex-col justify-center relative">
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={currentSlide?.id || 'default-slide'}
+                initial={{ opacity: 0, y: 8, scale: 0.99 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.99 }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+                className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-blue-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
+              >
+                {/* Ambient Glow */}
+                <div className={`absolute -top-10 -right-10 w-28 h-28 rounded-full blur-3xl pointer-events-none ${
+                  currentSlide?.type === 'team'
+                    ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500/15' : 'bg-red-500/15'
+                    : 'bg-amber-500/15'
+                }`}></div>
+
+                {/* Slide Bar Header */}
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full animate-pulse ${
+                      currentSlide?.type === 'team'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                        : 'bg-amber-500'
+                    }`}></span>
+                    <span className={`text-[11px] font-black tracking-widest uppercase ${
+                      currentSlide?.type === 'team'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'text-blue-400' : 'text-red-400'
+                        : 'text-amber-400'
+                    }`}>
+                      {currentSlide?.title}
+                    </span>
+                  </div>
+
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                    {currentSlide?.type === 'team' ? 'Team Roster Lineup' : 'Rulebook'}
+                  </span>
+                </div>
+
+                {/* SLIDE INNER CONTENT */}
+                <div className="my-auto py-1 flex-1 flex flex-col justify-center min-h-0">
+                  {/* TYPE: TEAM ROSTER SPOTS */}
+                  {currentSlide?.type === 'team' && (
+                    <div className="flex flex-col gap-2.5 h-full justify-center">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-blue-400' : 'bg-red-400'}`}></span>
+                          <span>{currentSlide.teamLabel} Speaker Lineup</span>
+                        </span>
+                        <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded border ${
+                          currentSlide.teamType === 'PROPOSER' 
+                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                            : 'bg-red-500/10 text-red-400 border-red-500/20'
+                        }`}>
+                          {currentSlide.members?.length || 0} / {currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax} Seated
+                        </span>
+                      </div>
+
+                      {/* Spots Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 my-auto">
+                        {Array.from({ length: currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax }).map((_, idx) => {
+                          const member = currentSlide.members?.[idx];
+                          return (
+                            <div 
+                              key={idx}
+                              className={`p-3 rounded-xl border flex flex-col justify-between min-h-[60px] ${
+                                member 
+                                  ? currentSlide.teamType === 'PROPOSER'
+                                    ? 'bg-blue-950/40 border-blue-500/40 text-blue-200'
+                                    : 'bg-red-950/40 border-red-500/40 text-red-200'
+                                  : 'bg-[#10121a]/50 border-dashed border-gray-800 text-gray-500'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                                  Speaker {idx + 1}
+                                </span>
+                                <span className={`w-2 h-2 rounded-full ${member ? 'bg-emerald-400' : 'bg-gray-700'}`}></span>
+                              </div>
+                              {member ? (
+                                <span className="text-xs font-black text-white truncate mt-1">
+                                  {member.name}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold italic text-gray-600 mt-1">
+                                  Open Spot
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="p-4 bg-[#141620]/60 border border-gray-800/60 rounded-xl text-center my-1">
-                      <p className="text-xs text-gray-400 font-bold italic">
-                        No seated speakers confirmed yet for {currentSlide.teamLabel}.
+                  )}
+
+                  {/* TYPE: SINGLE RULE SLIDE */}
+                  {currentSlide?.type === 'rules' && currentSlide.rule && (
+                    <div className="flex flex-col items-center justify-center text-center p-3 sm:p-4 my-auto h-full">
+                      <div className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-black mb-1.5 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
+                        0{currentSlide.ruleIndex}
+                      </div>
+                      <h4 className="text-sm sm:text-base font-black text-amber-300 uppercase tracking-wider mb-1">
+                        {currentSlide.rule.name}
+                      </h4>
+                      <p className="text-xs sm:text-sm text-gray-200 font-medium leading-relaxed max-w-xl mx-auto">
+                        {currentSlide.rule.description}
                       </p>
                     </div>
                   )}
                 </div>
-              )}
 
-              {/* TYPE 3: RULES SLIDE */}
-              {currentSlide.type === 'rules' && (
-                <div className="grid grid-cols-1 gap-2 my-1">
-                  {currentSlide.rulesPair?.map((rule, idx) => (
-                    <div 
-                      key={rule.id || idx}
-                      className="bg-[#12141d]/80 border border-amber-500/20 p-2.5 rounded-xl flex items-start gap-3"
-                    >
-                      <div className="shrink-0 w-6 h-6 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 text-[10px] font-black flex items-center justify-center mt-0.5">
-                        0{idx + 1}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-xs font-black text-white uppercase tracking-wide">
-                          {rule.name}
-                        </h4>
-                        <p className="text-[11px] text-gray-400 font-medium leading-tight mt-0.5 line-clamp-2">
-                          {rule.description}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                {/* Slide Footer Info Bar */}
+                <div className="pt-2 border-t border-gray-800/40 flex items-center justify-between text-[10px] text-gray-400 font-bold shrink-0">
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-gray-500 uppercase tracking-wider">Status:</span>
+                    <span className="text-emerald-400 font-black uppercase">Waiting for Speakers</span>
+                  </span>
+                  <span className="text-gray-500 uppercase tracking-wider">
+                    {seatedPro.length + seatedCon.length} / {proSeatsMax + conSeatsMax} Total Seated
+                  </span>
                 </div>
-              )}
-            </div>
 
-            {/* Slide Footer Info Bar */}
-            <div className="pt-2.5 border-t border-gray-800/40 flex items-center justify-between text-[10px] text-gray-400 font-bold">
-              <span className="flex items-center gap-1.5">
-                <span className="text-gray-500 uppercase tracking-wider">Status:</span>
-                <span className="text-emerald-400 font-black uppercase">Waiting for Speakers</span>
-              </span>
-              <span className="text-gray-500 uppercase tracking-wider">
-                {seatedPro.length + seatedCon.length} Total Seated
-              </span>
-            </div>
-
-            {/* Slide Timer Countdown Bar */}
-            <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-900 overflow-hidden">
-              <motion.div 
-                key={activeSlideIndex}
-                initial={{ width: "0%" }}
-                animate={{ width: "100%" }}
-                transition={{ duration: currentSlide.duration / 1000, ease: "linear" }}
-                className={`h-full ${
-                  currentSlide.type === 'team'
-                    ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
-                    : currentSlide.type === 'rules' ? 'bg-amber-500' : 'bg-blue-500'
-                }`}
-              />
-            </div>
-          </motion.div>
-        </AnimatePresence>
+                {/* Slide Timer Countdown Progress Bar */}
+                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-900 overflow-hidden">
+                  <motion.div 
+                    key={activeSlideIndex}
+                    initial={{ width: "0%" }}
+                    animate={{ width: "100%" }}
+                    transition={{ duration: (currentSlide?.duration || 10000) / 1000, ease: "linear" }}
+                    className={`h-full ${
+                      currentSlide?.type === 'team'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                        : 'bg-amber-500'
+                    }`}
+                  />
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        )}
       </div>
 
-      {/* 3. SLIDESHOW NAVIGATION INDICATORS */}
-      <div className="flex justify-center items-center gap-1.5 py-1 shrink-0">
+      {/* 5. SLIDESHOW NAVIGATION INDICATORS */}
+      <div className="flex justify-center items-center gap-1.5 py-0.5 shrink-0">
         {slides.map((s, idx) => (
           <button
             key={s.id}
             onClick={() => setActiveSlideIndex(idx)}
             className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
               idx === activeSlideIndex 
-                ? s.type === 'prompt' ? 'w-5 bg-blue-500' : s.type === 'team' ? 'w-5 bg-purple-500' : 'w-5 bg-amber-500'
+                ? s.type === 'team' 
+                  ? s.teamType === 'PROPOSER' ? 'w-5 bg-blue-500' : 'w-5 bg-red-500'
+                  : 'w-5 bg-amber-500'
                 : 'w-1.5 bg-gray-800 hover:bg-gray-700'
             }`}
             title={`Go to ${s.title}`}

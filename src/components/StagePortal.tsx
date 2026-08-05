@@ -13,14 +13,15 @@ import CreditsLayout from './stage/CreditsLayout';
 import { X, Volume2, VolumeX, Megaphone, Pin, PinOff, ChevronUp, ChevronDown, Move, AlertTriangle, AlertCircle, ShieldAlert, ShieldCheck, CheckCircle2, Bot, Sparkles, Sliders, RotateCcw, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { playPenaltyBuzzerSound } from '../utils/audio';
-import { TOTALITY_TALK_DISCLOSURE_TEXT, playDisclosureTTS, stopTTS, getAvailableTTSVoices, TTSVoiceOption, parseDisclosureSegments, DisclosureSegment, findFeminineVoice } from '../lib/disclosureText';
-import { getActivePhaseTranscripts } from '../lib/transcriptUtils';
+import { TOTALITY_TALK_DISCLOSURE_TEXT, TOTALITY_TALK_SHORT_DISCLOSURE_TEXT, playDisclosureTTS, stopTTS, getAvailableTTSVoices, TTSVoiceOption, parseDisclosureSegments, DisclosureSegment, findFeminineVoice } from '../lib/disclosureText';
+import { getActivePhaseTranscripts, limitUnsavedTranscripts, cleanAndFormatTranscriptText, ACCENT_LANGUAGE_OPTIONS } from '../lib/transcriptUtils';
 
 interface StagePortalProps {
   state: DebateState;
   formatTime: (seconds: number) => string;
   onStateUpdate?: (partialState: Partial<DebateState>) => void;
   onExit?: () => void;
+  suppressAudio?: boolean;
 }
 
 function formatNonVerbalSounds(text: string): string {
@@ -143,7 +144,8 @@ function StaticSubtitleBlock({ text }: { text: string }) {
   );
 }
 
-export default function StagePortal({ state, formatTime, onStateUpdate, onExit }: StagePortalProps) {
+export default function StagePortal({ state, formatTime, onStateUpdate, onExit, suppressAudio }: StagePortalProps) {
+  const isAudioSuppressed = suppressAudio || !!onExit;
   // Phase detection: Extract current active phase ID (standardize to uppercase)
   const currentPhaseId = (state?.currentPhase || 'LOBBY').toUpperCase();
 
@@ -377,7 +379,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
     if (notice.id !== lastActiveNoticeIdRef.current) {
       lastActiveNoticeIdRef.current = notice.id;
-      playPenaltyBuzzerSound();
+      if (!isAudioSuppressed) playPenaltyBuzzerSound();
     }
 
     if (onStateUpdate) {
@@ -392,23 +394,23 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
     const activePopup = state?.popupTemplates?.find(p => p.isPlaying);
     if (activePopup && activePopup.id !== lastActivePopupIdRef.current) {
       lastActivePopupIdRef.current = activePopup.id;
-      playPenaltyBuzzerSound();
+      if (!isAudioSuppressed) playPenaltyBuzzerSound();
     } else if (!activePopup) {
       lastActivePopupIdRef.current = null;
     }
-  }, [state?.popupTemplates]);
+  }, [state?.popupTemplates, isAudioSuppressed]);
 
   useEffect(() => {
     const count = state?.violations?.length || 0;
     if (count > lastViolationsCountRef.current) {
-      playPenaltyBuzzerSound();
+      if (!isAudioSuppressed) playPenaltyBuzzerSound();
     }
     lastViolationsCountRef.current = count;
-  }, [state?.violations]);
+  }, [state?.violations, isAudioSuppressed]);
 
   const [teleprompterCharIndex, setTeleprompterCharIndex] = useState(0);
   const [availableVoices, setAvailableVoices] = useState<TTSVoiceOption[]>([]);
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('ai-aoede');
   const [voicePitch, setVoicePitch] = useState<number>(1.0);
   const [voiceRate, setVoiceRate] = useState<number>(0.95);
   const teleprompterRef = useRef<HTMLDivElement>(null);
@@ -459,8 +461,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
       currentPhaseId === 'LOBBY' ||
       !!state?.activeDisclosureParticipantId ||
       !!state?.introVideoPlaying ||
-      !!state?.openingStatementVideoPlayingForParticipantId ||
-      !!state?.showOpeningStatementPopupForParticipantId;
+      !!state?.openingStatementVideoPlayingForParticipantId;
 
     if (isVideoPlaybackActive) return;
 
@@ -528,7 +529,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                 transcriptionSession: {
                   ...session,
                   interimTranscript: cue,
-                  isRecording: true
+                  isRecording: session.isRecording ?? false
                 }
               });
             }
@@ -557,7 +558,9 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
         recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        const activeLang = stateRef.current?.transcriptionSession?.transcriptionLanguage || 'en-US';
+        recognition.lang = activeLang === 'auto' ? (navigator.language || 'en-US') : activeLang;
+        try { recognition.maxAlternatives = 3; } catch (e) {}
 
         recognition.onresult = (event: any) => {
           let rawInterim = '';
@@ -571,8 +574,9 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             }
           }
 
-          const interimText = formatNonVerbalSounds(rawInterim.trim());
-          const finalText = formatNonVerbalSounds(rawFinal.trim());
+          const curLang = stateRef.current?.transcriptionSession?.transcriptionLanguage || 'en-US';
+          const interimText = cleanAndFormatTranscriptText(formatNonVerbalSounds(rawInterim.trim()), curLang);
+          const finalText = cleanAndFormatTranscriptText(formatNonVerbalSounds(rawFinal.trim()), curLang);
           interimTextRef.current = interimText;
 
           const currentState = stateRef.current;
@@ -588,9 +592,13 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             let currentIdx = speakerIndexRef.current;
             const currentPitch = lastPitchRef.current;
 
-            // Check if pitch matches Host's trained/known voice profile (index 0)
-            const hostPitchProfile = speakerPitchProfilesRef.current[0];
-            const isHostVoiceMatch = currentPitch > 0 && hostPitchProfile && hostPitchProfile > 0 && Math.abs(currentPitch - hostPitchProfile) < 40;
+            // Check if pitch matches Host's trained/known voice profile (index 0 or hostVoiceProfile in state)
+            const hostProfile = currentState?.transcriptionSession?.hostVoiceProfile;
+            const hostPitchProfile = hostProfile?.pitchMean || speakerPitchProfilesRef.current[0];
+            const isHostVoiceMatch = currentPitch > 0 && hostPitchProfile && hostPitchProfile > 0 && (
+              (hostProfile && currentPitch >= hostProfile.pitchMin - 20 && currentPitch <= hostProfile.pitchMax + 20) ||
+              Math.abs(currentPitch - hostPitchProfile) < 40
+            );
 
             if (isHostVoiceMatch) {
               // Host interjected! Prioritize Host voice over selected debater seat
@@ -649,7 +657,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
               transcriptionSession: {
                 ...currentSession,
                 interimTranscript: interimText,
-                isRecording: true
+                isRecording: currentSession.isRecording ?? false
               }
             });
           }
@@ -685,29 +693,73 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
               round: currentState?.currentRound || 'Round 1'
             };
 
+            const isRec = !!currentSession.isRecording;
+            const updatedTranscripts = [...existingTranscripts, newSegment];
+            const finalTranscripts = limitUnsavedTranscripts(updatedTranscripts, isRec, 15);
+
             onStateUpdate?.({
               currentSpeakerId: activeSpeaker.id,
               transcriptionSession: {
                 ...currentSession,
                 interimTranscript: '',
-                isRecording: true,
-                transcripts: [...existingTranscripts, newSegment]
+                isRecording: isRec,
+                transcripts: finalTranscripts
               }
             });
+
+            // Asynchronous AI Accent & Grammar Smoother (Gemini 3.6 Flash)
+            if (currentSession.aiEnhanceEnabled || currentSession.autoTranslateEnabled) {
+              const targetId = newSegment.id;
+              fetch('/api/transcription/smooth-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: finalText,
+                  accent: curLang,
+                  language: curLang
+                })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.smoothedText && data.smoothedText !== finalText) {
+                  const latestSession = stateRef.current?.transcriptionSession || { id: 'default', transcripts: [] };
+                  const updated = (latestSession.transcripts || []).map(item => {
+                    if (item.id === targetId) {
+                      return { ...item, text: data.smoothedText };
+                    }
+                    return item;
+                  });
+                  onStateUpdate?.({
+                    transcriptionSession: {
+                      ...latestSession,
+                      transcripts: updated
+                    }
+                  });
+                }
+              })
+              .catch(() => {});
+            }
           }
         };
 
         recognition.onend = () => {
           if (!isStopped) {
-            try {
-              recognition.start();
-            } catch (e) {
-              // ignore continuous restart errors
-            }
+            setTimeout(() => {
+              if (!isStopped && recognition) {
+                try {
+                  recognition.start();
+                } catch (e) {
+                  // ignore continuous restart errors
+                }
+              }
+            }, 100);
           }
         };
 
-        recognition.onerror = () => {
+        recognition.onerror = (e: any) => {
+          if (e?.error === 'aborted' || e?.error === 'no-speech') {
+            return;
+          }
           // silent handling for expected mic noise/pause events
         };
 
@@ -734,30 +786,45 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
     currentPhaseId,
     state?.activeDisclosureParticipantId,
     state?.introVideoPlaying,
-    state?.openingStatementVideoPlayingForParticipantId,
-    state?.showOpeningStatementPopupForParticipantId
+    state?.openingStatementVideoPlayingForParticipantId
   ]);
 
-  // Load available system voices
+  const selectedVoiceURIRef = React.useRef(selectedVoiceURI);
+  React.useEffect(() => {
+    selectedVoiceURIRef.current = selectedVoiceURI;
+  }, [selectedVoiceURI]);
+
+  // Load available system & AI voices
   useEffect(() => {
     const updateVoices = () => {
       const voices = getAvailableTTSVoices();
       setAvailableVoices(voices);
-      if (voices.length > 0 && !selectedVoiceURI) {
-        const sysVoices = (typeof window !== 'undefined' && window.speechSynthesis) ? window.speechSynthesis.getVoices() : [];
-        const pref = findFeminineVoice(sysVoices);
-        if (pref) setSelectedVoiceURI(pref.voiceURI);
+      if (voices.length > 0 && !selectedVoiceURIRef.current) {
+        const pref = voices.find(v => v.default) || voices[0];
+        if (pref) {
+          selectedVoiceURIRef.current = pref.uri;
+          setSelectedVoiceURI(pref.uri);
+        }
       }
     };
     updateVoices();
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.onvoiceschanged = updateVoices;
     }
+    return () => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
   }, []);
 
+  const activeDisclosureText = state?.activeDisclosureParticipantId === 'general'
+    ? TOTALITY_TALK_DISCLOSURE_TEXT
+    : TOTALITY_TALK_SHORT_DISCLOSURE_TEXT;
+
   const disclosureSegments = React.useMemo(() => {
-    return parseDisclosureSegments(TOTALITY_TALK_DISCLOSURE_TEXT);
-  }, []);
+    return parseDisclosureSegments(activeDisclosureText);
+  }, [activeDisclosureText]);
 
   const activeSegmentIndex = React.useMemo(() => {
     if (!disclosureSegments.length) return 0;
@@ -770,10 +837,12 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
   }, [disclosureSegments, teleprompterCharIndex]);
 
   const activeDisclosureParticipantIdRef = React.useRef<string | null>(null);
+  const [isTTSSpeaking, setIsTTSSpeaking] = React.useState(false);
 
-  // Handler when disclosure speech finishes or is closed: close disclosure overlay on stage
-  const handleDisclosureTTSComplete = () => {
+  // Close disclosure overlay without auto-agreeing
+  const handleCloseDisclosureOverlay = () => {
     activeDisclosureParticipantIdRef.current = null;
+    setIsTTSSpeaking(false);
     stopTTS();
 
     onStateUpdate?.({
@@ -782,12 +851,15 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
   };
 
   const handleManualReplayDisclosureTTS = () => {
+    if (isAudioSuppressed) return;
     const activeId = state?.activeDisclosureParticipantId;
     if (!activeId) return;
+    const textToSpeak = activeId === 'general' ? TOTALITY_TALK_DISCLOSURE_TEXT : TOTALITY_TALK_SHORT_DISCLOSURE_TEXT;
     activeDisclosureParticipantIdRef.current = activeId;
     setTeleprompterCharIndex(0);
+    setIsTTSSpeaking(true);
     playDisclosureTTS(
-      TOTALITY_TALK_DISCLOSURE_TEXT,
+      textToSpeak,
       {
         voiceURI: selectedVoiceURI,
         pitch: voicePitch,
@@ -797,21 +869,35 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
         setTeleprompterCharIndex(charIndex);
       },
       () => {
-        handleDisclosureTTSComplete();
+        setIsTTSSpeaking(false);
+      },
+      () => {
+        setIsTTSSpeaking(true);
       }
     );
   };
 
   // TTS Trigger Effect for Guidelines & AI Disclosure Notice with Teleprompter tracking & configurable voices
   useEffect(() => {
+    if (isAudioSuppressed) {
+      if (activeDisclosureParticipantIdRef.current) {
+        activeDisclosureParticipantIdRef.current = null;
+        setIsTTSSpeaking(false);
+        stopTTS();
+      }
+      return;
+    }
+
     const activeId = state?.activeDisclosureParticipantId || null;
 
     if (activeId) {
       if (activeDisclosureParticipantIdRef.current !== activeId) {
         activeDisclosureParticipantIdRef.current = activeId;
         setTeleprompterCharIndex(0);
+        setIsTTSSpeaking(true);
+        const textToSpeak = activeId === 'general' ? TOTALITY_TALK_DISCLOSURE_TEXT : TOTALITY_TALK_SHORT_DISCLOSURE_TEXT;
         playDisclosureTTS(
-          TOTALITY_TALK_DISCLOSURE_TEXT,
+          textToSpeak,
           {
             voiceURI: selectedVoiceURI,
             pitch: voicePitch,
@@ -821,13 +907,17 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             setTeleprompterCharIndex(charIndex);
           },
           () => {
-            handleDisclosureTTSComplete();
+            setIsTTSSpeaking(false);
+          },
+          () => {
+            setIsTTSSpeaking(true);
           }
         );
       }
     } else {
       if (activeDisclosureParticipantIdRef.current) {
         activeDisclosureParticipantIdRef.current = null;
+        setIsTTSSpeaking(false);
         stopTTS();
       }
     }
@@ -835,15 +925,28 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
   // Auto-scroll teleprompter container to keep the active spoken line centered
   useEffect(() => {
-    if (teleprompterRef.current && state?.activeDisclosureParticipantId) {
+    if (!teleprompterRef.current || !state?.activeDisclosureParticipantId) return;
+
+    const timer = setTimeout(() => {
+      const container = teleprompterRef.current;
+      if (!container) return;
       const activeEl = document.getElementById(`teleprompter-seg-${activeSegmentIndex}`);
       if (activeEl) {
-        activeEl.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center'
-        });
+        const containerRect = container.getBoundingClientRect();
+        const activeRect = activeEl.getBoundingClientRect();
+        if (containerRect.height > 0) {
+          const relativeTop = activeRect.top - containerRect.top + container.scrollTop;
+          const targetScroll = relativeTop - (containerRect.height / 2) + (activeRect.height / 2);
+
+          container.scrollTo({
+            top: Math.max(0, targetScroll),
+            behavior: 'smooth'
+          });
+        }
       }
-    }
+    }, 40);
+
+    return () => clearTimeout(timer);
   }, [activeSegmentIndex, state?.activeDisclosureParticipantId]);
 
   const currentVideoKey = `${currentPhaseId}_${currentRoundName}_${state?.closingSubPhase || ''}_${state?.declaredWinner || ''}_${videoUrl}`;
@@ -893,6 +996,14 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
   // Background music controller
   useEffect(() => {
+    if (isAudioSuppressed) {
+      if (bgMusicRef.current) {
+        bgMusicRef.current.pause();
+        bgMusicRef.current = null;
+      }
+      return;
+    }
+
     const trackUrl = state?.settings?.bgMusicTrack;
     if (!trackUrl) {
       if (bgMusicRef.current) {
@@ -1099,9 +1210,6 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span>LIVE STAGE PROJECTION</span>
           </div>
-          <div className="flex items-center gap-2 text-[10px] font-mono font-bold text-gray-500">
-            <span className="text-[#f97316] font-bold">8:9 ASPECT</span>
-          </div>
         </div>
 
         {/* STRIKING RED HOLOGRAPHIC RULES VIOLATION POPUP OVERLAY */}
@@ -1115,23 +1223,23 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
               transition={{ type: 'spring', damping: 25, stiffness: 350 }}
               className="absolute inset-0 z-[65] pointer-events-auto flex items-center justify-center p-4 bg-black/50 backdrop-blur-[3px]"
             >
-              <div className="relative overflow-hidden w-[330px] sm:w-[360px] aspect-square rounded-2xl border-2 border-red-500 bg-gradient-to-b from-[#3a0808]/98 via-[#220404]/98 to-[#0f0202]/98 p-5 shadow-[0_0_60px_rgba(239,68,68,0.9),inset_0_0_30px_rgba(239,68,68,0.35)] flex flex-col justify-between">
+              <div className="relative overflow-hidden w-[330px] sm:w-[360px] aspect-square rounded-2xl border-2 border-orange-500 bg-gradient-to-b from-[#3a1a08]/98 via-[#221004]/98 to-[#0f0702]/98 p-5 shadow-[0_0_60px_rgba(249,115,22,0.9),inset_0_0_30px_rgba(249,115,22,0.35)] flex flex-col justify-between">
                 
-                {/* Animated Sci-Fi Red Pulse Top Bar & Scanline Grid */}
-                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-600 via-amber-500 via-red-500 to-red-700 animate-pulse" />
-                <div className="absolute inset-0 bg-[linear-gradient(rgba(239,68,68,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(239,68,68,0.08)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none" />
+                {/* Animated Sci-Fi Orange Pulse Top Bar & Scanline Grid */}
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-orange-600 via-amber-500 via-orange-500 to-orange-700 animate-pulse" />
+                <div className="absolute inset-0 bg-[linear-gradient(rgba(249,115,22,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(249,115,22,0.08)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none" />
 
                 {/* Top Header */}
-                <div className="relative z-10 flex items-start justify-between border-b border-red-500/40 pb-3">
+                <div className="relative z-10 flex items-start justify-between border-b border-orange-500/40 pb-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="p-2 bg-red-500/20 border-2 border-red-500/70 rounded-xl text-red-500 animate-bounce shadow-[0_0_20px_rgba(239,68,68,0.7)] shrink-0">
-                      <AlertTriangle className="w-6 h-6 text-red-500" />
+                    <div className="p-2 bg-orange-500/20 border-2 border-orange-500/70 rounded-xl text-orange-500 animate-bounce shadow-[0_0_20px_rgba(249,115,22,0.7)] shrink-0">
+                      <AlertTriangle className="w-6 h-6 text-orange-500" />
                     </div>
                     <div className="flex flex-col min-w-0">
-                      <span className="text-xs font-black tracking-[0.18em] text-red-400 uppercase font-mono animate-pulse">
+                      <span className="text-xs font-black tracking-[0.18em] text-orange-400 uppercase font-mono animate-pulse">
                         RULE VIOLATION OCCURRED
                       </span>
-                      <span className="text-[10px] font-bold text-red-200/90 font-mono tracking-wider">
+                      <span className="text-[10px] font-bold text-orange-200/90 font-mono tracking-wider">
                         STAGE NOTICE
                       </span>
                     </div>
@@ -1140,7 +1248,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                   {onStateUpdate && (
                     <button
                       onClick={() => onStateUpdate({ activeViolationNotice: null })}
-                      className="p-1.5 text-red-400 hover:text-white bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      className="p-1.5 text-orange-400 hover:text-white bg-orange-500/20 hover:bg-orange-500/40 border border-orange-500/50 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0"
                       title="Dismiss Stage Notice"
                     >
                       <X className="w-4 h-4" />
@@ -1149,27 +1257,27 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                 </div>
 
                 {/* Squarish Central Details Body */}
-                <div className="relative z-10 flex flex-col justify-center gap-3 bg-black/80 border border-red-500/35 rounded-xl p-3.5 my-auto text-xs shadow-inner">
+                <div className="relative z-10 flex flex-col justify-center gap-3 bg-black/80 border border-orange-500/35 rounded-xl p-3.5 my-auto text-xs shadow-inner">
                   {/* Subject / Player Name */}
-                  <div className="flex flex-col gap-0.5 border-b border-red-500/25 pb-2.5">
-                    <span className="text-[9px] font-black tracking-widest text-red-400 uppercase font-mono flex items-center gap-1">
-                      <ShieldAlert className="w-3 h-3 text-red-500" />
+                  <div className="flex flex-col gap-0.5 border-b border-orange-500/25 pb-2.5">
+                    <span className="text-[9px] font-black tracking-widest text-orange-400 uppercase font-mono flex items-center gap-1">
+                      <ShieldAlert className="w-3 h-3 text-orange-500" />
                       PLAYER / PARTICIPANT
                     </span>
                     <span className="text-base font-black text-white tracking-wide leading-tight">
                       {state.activeViolationNotice.participantName}
                     </span>
-                    <span className="text-[10px] font-bold text-red-300/80 font-mono">
+                    <span className="text-[10px] font-bold text-orange-300/80 font-mono">
                       Role: {state.activeViolationNotice.participantRole}
                     </span>
                   </div>
 
                   {/* Violation / Rule Details */}
                   <div className="flex flex-col gap-1 pt-0.5">
-                    <span className="text-[9px] font-black tracking-widest text-red-400 uppercase font-mono">
+                    <span className="text-[9px] font-black tracking-widest text-orange-400 uppercase font-mono">
                       RULE VIOLATED
                     </span>
-                    <span className="text-xs font-black text-red-200">
+                    <span className="text-xs font-black text-orange-200">
                       "{state.activeViolationNotice.ruleName}"
                     </span>
                     {state.activeViolationNotice.ruleDescription && (
@@ -1181,7 +1289,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                 </div>
 
                 {/* Footer Timestamp */}
-                <div className="relative z-10 flex items-center justify-between text-[9px] font-mono text-red-400/80 pt-2 border-t border-red-500/25">
+                <div className="relative z-10 flex items-center justify-between text-[9px] font-mono text-orange-400/80 pt-2 border-t border-orange-500/25">
                   <span>TIME: {state.activeViolationNotice.timestamp}</span>
                   <span></span>
                 </div>
@@ -1194,8 +1302,8 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
         <AnimatePresence>
           {state?.activeDisclosureParticipantId && (() => {
             const participant = state.participants?.find(p => p.id === state.activeDisclosureParticipantId);
-            const paragraphs = TOTALITY_TALK_DISCLOSURE_TEXT.split('\n\n');
-            const totalLen = TOTALITY_TALK_DISCLOSURE_TEXT.length || 1;
+            const paragraphs = activeDisclosureText.split('\n\n');
+            const totalLen = activeDisclosureText.length || 1;
             const progressPercent = Math.min(100, Math.round((teleprompterCharIndex / totalLen) * 100));
 
             return (
@@ -1208,7 +1316,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                 className="absolute inset-0 z-[66] pointer-events-auto flex flex-col bg-[#030a16] border-2 border-cyan-500/80 p-4 sm:p-6 shadow-[0_0_80px_rgba(6,182,212,0.5),inset_0_0_40px_rgba(6,182,212,0.15)] overflow-hidden"
               >
                 {/* Top cyan gradient pulse line & hologram grid */}
-                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500 animate-pulse" />
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-cyan-500 via-cyan-400 to-cyan-600 animate-pulse" />
                 <div className="absolute inset-0 bg-[linear-gradient(rgba(6,182,212,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(6,182,212,0.06)_1px,transparent_1px)] bg-[size:20px_20px] pointer-events-none" />
 
                 {/* Top Broadcast Header Bar */}
@@ -1240,11 +1348,10 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                     </div>
                     <button
                       onClick={() => {
-                        stopTTS();
-                        onStateUpdate?.({ activeDisclosureParticipantId: null });
+                        handleCloseDisclosureOverlay();
                       }}
-                      className="p-1.5 bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 text-red-300 rounded-xl transition-all cursor-pointer"
-                      title="Dismiss Disclosure Overlay"
+                      className="p-1.5 bg-orange-500/20 hover:bg-orange-500/40 border border-orange-500/50 text-orange-300 rounded-xl transition-all cursor-pointer"
+                      title="Close Overlay"
                     >
                       <X className="w-5 h-5" />
                     </button>
@@ -1264,7 +1371,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                       </span>
                       <div className="w-32 h-2 bg-gray-900 rounded-full overflow-hidden border border-cyan-500/40">
                         <div
-                          className="h-full bg-gradient-to-r from-cyan-500 to-blue-400 transition-all duration-300"
+                          className="h-full bg-gradient-to-r from-cyan-500 to-cyan-400 transition-all duration-300"
                           style={{ width: `${progressPercent}%` }}
                         />
                       </div>
@@ -1284,7 +1391,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                             id={`teleprompter-seg-${idx}`}
                             className={`transition-all duration-300 rounded-xl p-3 sm:p-3.5 ${
                               isActive
-                                ? 'bg-gradient-to-r from-cyan-950/90 via-blue-950/80 to-cyan-950/90 border-l-4 border-cyan-400 text-white font-extrabold shadow-[0_0_30px_rgba(6,182,212,0.4)] scale-[1.02]'
+                                ? 'bg-gradient-to-r from-cyan-950/90 via-cyan-900/80 to-cyan-950/90 border-l-4 border-cyan-400 text-white font-extrabold shadow-[0_0_30px_rgba(6,182,212,0.4)] scale-[1.02]'
                                 : 'text-gray-400 opacity-60 font-medium'
                             }`}
                           >
@@ -1316,7 +1423,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
                     {/* AI Helper Bot Avatar Graphic Frame */}
                     <div className="relative z-10 flex flex-col items-center justify-center flex-1 py-4">
-                      <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-3xl bg-gradient-to-tr from-cyan-500/40 via-blue-500/30 to-indigo-500/40 border-2 border-cyan-300 shadow-[0_0_40px_rgba(6,182,212,0.6)] flex items-center justify-center mb-4 group">
+                      <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-3xl bg-gradient-to-tr from-cyan-500/40 via-cyan-600/30 to-cyan-500/40 border-2 border-cyan-300 shadow-[0_0_40px_rgba(6,182,212,0.6)] flex items-center justify-center mb-4 group">
                         <Bot className="w-16 h-16 text-cyan-200 animate-pulse drop-shadow-[0_0_15px_rgba(6,182,212,0.9)]" />
                         <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-cyan-400 rounded-full border-2 border-black animate-ping" />
                         
@@ -1334,13 +1441,47 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                       </p>
 
                       {/* Equalizer Audio Waves */}
-                      <div className="flex items-center justify-center gap-1.5 mt-5">
-                        <span className="w-1.5 h-6 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-1.5 h-10 bg-cyan-300 rounded-full animate-bounce" style={{ animationDelay: '120ms' }} />
-                        <span className="w-1.5 h-12 bg-cyan-200 rounded-full animate-bounce" style={{ animationDelay: '240ms' }} />
-                        <span className="w-1.5 h-8 bg-cyan-300 rounded-full animate-bounce" style={{ animationDelay: '80ms' }} />
-                        <span className="w-1.5 h-5 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '180ms' }} />
+                      <div className="flex items-center justify-center gap-1.5 my-4">
+                        <span className={`w-1.5 h-6 bg-cyan-400 rounded-full ${isTTSSpeaking ? 'animate-bounce' : 'opacity-40'}`} style={{ animationDelay: '0ms' }} />
+                        <span className={`w-1.5 h-10 bg-cyan-300 rounded-full ${isTTSSpeaking ? 'animate-bounce' : 'opacity-40'}`} style={{ animationDelay: '120ms' }} />
+                        <span className={`w-1.5 h-12 bg-cyan-200 rounded-full ${isTTSSpeaking ? 'animate-bounce' : 'opacity-40'}`} style={{ animationDelay: '240ms' }} />
+                        <span className={`w-1.5 h-8 bg-cyan-300 rounded-full ${isTTSSpeaking ? 'animate-bounce' : 'opacity-40'}`} style={{ animationDelay: '80ms' }} />
+                        <span className={`w-1.5 h-5 bg-cyan-400 rounded-full ${isTTSSpeaking ? 'animate-bounce' : 'opacity-40'}`} style={{ animationDelay: '180ms' }} />
                       </div>
+                    </div>
+
+                    {/* Interactive Control Buttons */}
+                    <div className="relative z-10 flex flex-col gap-2 pt-2 border-t border-cyan-500/30 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (isTTSSpeaking) {
+                              stopTTS();
+                              setIsTTSSpeaking(false);
+                            } else {
+                              handleManualReplayDisclosureTTS();
+                            }
+                          }}
+                          className={`flex-1 py-2.5 px-3 border rounded-xl text-xs font-bold font-mono flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md ${
+                            isTTSSpeaking
+                              ? 'bg-amber-500/20 border-amber-400/60 text-amber-300 hover:bg-amber-500/30'
+                              : 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200 hover:bg-cyan-500/30'
+                          }`}
+                        >
+                          {isTTSSpeaking ? <VolumeX className="w-4 h-4 text-amber-400" /> : <Volume2 className="w-4 h-4 text-cyan-300" />}
+                          <span>{isTTSSpeaking ? 'Pause / Stop Voice' : 'Replay Voiceover'}</span>
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          handleCloseDisclosureOverlay();
+                        }}
+                        className="w-full py-2.5 px-3 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-500/60 text-cyan-200 hover:text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md"
+                      >
+                        <X className="w-4 h-4 text-cyan-400" />
+                        <span>Close Teleprompter</span>
+                      </button>
                     </div>
                   </div>
 
@@ -1422,7 +1563,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
 
 
 
-          {state.openingStatementVideoPlayingForParticipantId && (() => {
+          {state.currentPhase !== 'LOBBY' && state.openingStatementVideoPlayingForParticipantId && (() => {
             const videoUrl = state.settings?.openingStatementVideoUrl || '';
             const participant = state.participants?.find(p => p.id === state.openingStatementVideoPlayingForParticipantId);
             return (
@@ -1465,7 +1606,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             );
           })()}
 
-          {state.showOpeningStatementPopupForParticipantId && (() => {
+          {state.currentPhase !== 'LOBBY' && state.showOpeningStatementPopupForParticipantId && (() => {
             const participantId = state.showOpeningStatementPopupForParticipantId;
             const popupState = {
               ...state,
@@ -1560,9 +1701,9 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                 transition={{ type: 'spring', stiffness: 300, damping: 25 }}
                 className={`absolute top-0 left-0 right-0 w-full z-30 bg-[#07080d]/95 backdrop-blur-md border-b p-2 sm:p-2.5 px-3 sm:px-4 shadow-[0_6px_20px_rgba(0,0,0,0.9)] flex items-center justify-between gap-2.5 sm:gap-3.5 text-xs select-none cursor-grab active:cursor-grabbing ${
                   activeTeam === 'PRO'
-                    ? 'border-blue-500/50 shadow-[0_4px_16px_rgba(59,130,246,0.3)]'
+                    ? 'border-cyan-500/50 shadow-[0_4px_16px_rgba(6,182,212,0.3)]'
                     : activeTeam === 'CON'
-                    ? 'border-rose-500/50 shadow-[0_4px_16px_rgba(239,68,68,0.3)]'
+                    ? 'border-orange-500/50 shadow-[0_4px_16px_rgba(249,115,22,0.3)]'
                     : 'border-cyan-500/40 shadow-[0_4px_16px_rgba(0,242,255,0.2)]'
                 }`}
               >
@@ -1589,7 +1730,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                           <motion.div
                             animate={{ width: `${proPercent}%` }}
                             transition={{ type: 'spring', stiffness: 100, damping: 15 }}
-                            className={`h-full bg-gradient-to-r from-blue-700 via-blue-500 to-cyan-400 flex items-center justify-start pl-2 sm:pl-3 relative overflow-hidden ${activeTeam === 'PRO' ? 'brightness-125' : ''}`}
+                            className={`h-full bg-gradient-to-r from-cyan-700 via-cyan-500 to-cyan-400 flex items-center justify-start pl-2 sm:pl-3 relative overflow-hidden ${activeTeam === 'PRO' ? 'brightness-125' : ''}`}
                           >
                             <motion.div
                               className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none"
@@ -1597,7 +1738,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                               transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
                             />
                             <span className="text-xs sm:text-sm font-black text-white drop-shadow-md tracking-tight whitespace-nowrap z-10 flex items-center gap-1">
-                              PRO {proPercent}% <span className="text-blue-200/90 font-mono text-[10px] font-bold">({proVotes}V)</span>
+                              PRO {proPercent}% <span className="text-cyan-200/90 font-mono text-[10px] font-bold">({proVotes}V)</span>
                             </span>
                           </motion.div>
 
@@ -1605,7 +1746,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                           <motion.div
                             animate={{ width: `${conPercent}%` }}
                             transition={{ type: 'spring', stiffness: 100, damping: 15 }}
-                            className={`h-full bg-gradient-to-l from-rose-700 via-rose-500 to-amber-400 flex items-center justify-end pr-2 sm:pr-3 relative overflow-hidden ${activeTeam === 'CON' ? 'brightness-125' : ''}`}
+                            className={`h-full bg-gradient-to-l from-orange-700 via-orange-500 to-amber-400 flex items-center justify-end pr-2 sm:pr-3 relative overflow-hidden ${activeTeam === 'CON' ? 'brightness-125' : ''}`}
                           >
                             <motion.div
                               className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none"
@@ -1613,7 +1754,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                               transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
                             />
                             <span className="text-xs sm:text-sm font-black text-white drop-shadow-md tracking-tight whitespace-nowrap z-10 flex items-center gap-1">
-                              <span className="text-rose-200/90 font-mono text-[10px] font-bold">({conVotes}V)</span> {conPercent}% CON
+                              <span className="text-orange-200/90 font-mono text-[10px] font-bold">({conVotes}V)</span> {conPercent}% CON
                             </span>
                           </motion.div>
 
@@ -1629,16 +1770,16 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -5 }}
                         transition={{ duration: 0.25 }}
-                        className="w-full bg-gradient-to-r from-amber-500/15 via-blue-500/15 to-amber-500/15 border border-amber-400/40 rounded-lg p-1.5 sm:p-2 text-center flex flex-col justify-center items-center shadow-lg"
+                        className="w-full bg-gradient-to-r from-cyan-500/15 via-cyan-400/15 to-cyan-500/15 border border-cyan-400/40 rounded-lg p-1.5 sm:p-2 text-center flex flex-col justify-center items-center shadow-lg"
                       >
                         <div className="flex items-center justify-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
-                          <h4 className="text-xs sm:text-sm md:text-base font-black text-amber-300 tracking-wide uppercase leading-tight">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping shrink-0" />
+                          <h4 className="text-xs sm:text-sm md:text-base font-black text-cyan-300 tracking-wide uppercase leading-tight">
                             👍 LIKE THE STREAM TO SHIFT THE GAUGE!
                           </h4>
                         </div>
                         <p className="text-[10px] sm:text-xs font-bold text-gray-200 mt-0.5 tracking-normal">
-                          Agree with the speaker? Every <strong className="text-white font-black underline decoration-amber-400">100 Likes = 1 Vote Point</strong> added directly to your team!
+                          Agree with the speaker? Every <strong className="text-white font-black underline decoration-cyan-400">100 Likes = 1 Vote Point</strong> added directly to your team!
                         </p>
                       </motion.div>
                     )}
@@ -1673,9 +1814,9 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
               }}
               className={`absolute left-1/2 -translate-x-1/2 bottom-3 z-20 w-[240px] select-none cursor-grab active:cursor-grabbing bg-[#090a0f]/90 backdrop-blur-md border rounded-lg p-2 shadow-[0_4px_12px_rgba(0,0,0,0.6)] flex flex-col gap-1 transition-all duration-300 ${
                 activeTeam === 'PRO'
-                  ? 'shadow-[0_0_8px_rgba(59,130,246,0.25)] border-blue-500/40'
+                  ? 'shadow-[0_0_8px_rgba(6,182,212,0.25)] border-cyan-500/40'
                   : activeTeam === 'CON'
-                  ? 'shadow-[0_0_8px_rgba(239,68,68,0.25)] border-rose-500/40'
+                  ? 'shadow-[0_0_8px_rgba(249,115,22,0.25)] border-orange-500/40'
                   : 'border-white/10'
               }`}
               whileHover={{ scale: 1.01 }}
@@ -1708,7 +1849,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                       {/* Votes Display */}
                       <div className="flex items-center justify-between px-0.5 text-[8px] font-black">
                         {/* PRO */}
-                        <div className={`flex items-baseline gap-0.5 ${activeTeam === 'PRO' ? 'text-blue-400 font-extrabold scale-[1.02] origin-left' : 'text-blue-400/70'}`}>
+                        <div className={`flex items-baseline gap-0.5 ${activeTeam === 'PRO' ? 'text-cyan-400 font-extrabold scale-[1.02] origin-left' : 'text-cyan-400/70'}`}>
                           <span>PRO:</span>
                           <span className="text-white font-mono text-[9px]">{proVotes}V</span>
                           <span className="text-gray-500 font-mono text-[6.5px]">({proLikes})</span>
@@ -1717,7 +1858,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                         {/* ACTIVE TEAM HIGHLIGHT */}
                         <div className="text-[7px] tracking-widest text-gray-500 font-bold">
                           {activeTeam ? (
-                            <span className={`animate-pulse ${activeTeam === 'PRO' ? 'text-blue-400' : 'text-rose-400'}`}>
+                            <span className={`animate-pulse ${activeTeam === 'PRO' ? 'text-cyan-400' : 'text-orange-400'}`}>
                               {activeTeam === 'PRO' ? 'LIKE PRO' : 'LIKE CON'}
                             </span>
                           ) : (
@@ -1726,7 +1867,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                         </div>
 
                         {/* CON */}
-                        <div className={`flex items-baseline gap-0.5 ${activeTeam === 'CON' ? 'text-rose-400 font-extrabold scale-[1.02] origin-right' : 'text-rose-400/70'}`}>
+                        <div className={`flex items-baseline gap-0.5 ${activeTeam === 'CON' ? 'text-orange-400 font-extrabold scale-[1.02] origin-right' : 'text-orange-400/70'}`}>
                           <span className="text-gray-500 font-mono text-[6.5px]">({conLikes})</span>
                           <span className="text-white font-mono text-[9px]">{conVotes}V</span>
                           <span>CON:</span>
@@ -1738,23 +1879,23 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                         <motion.div
                           animate={{ width: `${proPercent}%` }}
                           transition={{ type: 'spring', stiffness: 100, damping: 15 }}
-                          className={`h-full bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-400 ${activeTeam === 'PRO' ? 'brightness-125' : ''}`}
+                          className={`h-full bg-gradient-to-r from-cyan-600 via-cyan-500 to-cyan-400 ${activeTeam === 'PRO' ? 'brightness-125' : ''}`}
                         />
                         <motion.div
                           animate={{ width: `${conPercent}%` }}
                           transition={{ type: 'spring', stiffness: 100, damping: 15 }}
-                          className={`h-full bg-gradient-to-l from-rose-600 via-rose-500 to-amber-400 ${activeTeam === 'CON' ? 'brightness-125' : ''}`}
+                          className={`h-full bg-gradient-to-l from-orange-600 via-orange-500 to-amber-400 ${activeTeam === 'CON' ? 'brightness-125' : ''}`}
                         />
                         <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 bg-black z-10" />
                       </div>
 
                       {/* Tug of War Text-Rope */}
                       <div className="flex items-center justify-between text-[8px] font-mono bg-black/40 py-0.5 px-1 rounded border border-white/5 gap-1">
-                        <span className="text-blue-400 select-none text-[7px]">🔵</span>
+                        <span className="text-cyan-400 select-none text-[7px]">🔵</span>
                         <span className="text-gray-600 tracking-tight overflow-hidden text-center flex-1 font-mono text-[7px] select-none">
                           {leftRope}📍{rightRope}
                         </span>
-                        <span className="text-rose-400 select-none text-[7px]">🔴</span>
+                        <span className="text-orange-400 select-none text-[7px]">🔴</span>
                       </div>
                     </motion.div>
                   ) : (
@@ -1858,7 +1999,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                   className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[9px] font-mono font-bold flex items-center gap-1 transition-colors cursor-pointer"
                   title={isMuted ? "Unmute Audio" : "Mute Audio"}
                 >
-                  {isMuted ? <VolumeX className="w-3 h-3 text-yellow-400" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
+                  {isMuted ? <VolumeX className="w-3 h-3 text-white" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
                   <span>{isMuted ? 'Muted' : 'Sound On'}</span>
                 </button>
               </div>
@@ -1935,22 +2076,29 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
         const currentSpeaker = (state?.participants || []).find(p => p.id === state?.currentSpeakerId);
 
         // Automatic speaker tag determination
-        let speakerBadge = 'HOST';
-        let badgeColor = 'bg-cyan-700 text-white';
+        let speakerBadge = 'GUEST SPEAKER';
+        let badgeColor = 'bg-indigo-600 text-white';
+
+        const hostProfile = state?.transcriptionSession?.hostVoiceProfile;
+        const currentPitchVal = lastPitchRef.current;
+        const isVerifiedHostPitch = currentPitchVal > 0 && hostProfile && hostProfile.pitchMean > 0 && (
+          (currentPitchVal >= hostProfile.pitchMin - 20 && currentPitchVal <= hostProfile.pitchMax + 20) ||
+          Math.abs(currentPitchVal - hostProfile.pitchMean) < 35
+        );
 
         const isCrosstalk = activeCaptionText && /\[(?:multiple\s+people\s+talking|unable\s+to\s+caption|cross-?talk|overlapping\s+speech)[^\]]*\]/i.test(activeCaptionText);
 
         if (isCrosstalk) {
           speakerBadge = 'MULTIPLE SPEAKERS';
           badgeColor = 'bg-amber-600 text-white animate-pulse';
-        } else if (state?.currentSpeakerId === 'host') {
+        } else if (state?.currentSpeakerId === 'host' || isVerifiedHostPitch) {
           speakerBadge = 'HOST';
           badgeColor = 'bg-cyan-700 text-white';
-        } else if (currentSpeaker) {
+        } else if (currentSpeaker && currentSpeaker.id !== 'host') {
           const index = seatedList.findIndex(p => p.id === currentSpeaker.id);
           if (index === 0) {
             speakerBadge = `AFFIRMATIVE: ${currentSpeaker.name.split(' ')[0]}`;
-            badgeColor = 'bg-blue-600 text-white';
+            badgeColor = 'bg-cyan-600 text-white';
           } else if (index === 1) {
             speakerBadge = `OPPOSITION: ${currentSpeaker.name.split(' ')[0]}`;
             badgeColor = 'bg-emerald-600 text-white';
@@ -1965,7 +2113,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
           const matchedIndex = seatedList.findIndex(p => p.name.toLowerCase() === lastTranscript.speakerName.toLowerCase());
           if (matchedIndex === 0) {
             speakerBadge = `AFFIRMATIVE: ${seatedList[0].name.split(' ')[0]}`;
-            badgeColor = 'bg-blue-600 text-white';
+            badgeColor = 'bg-cyan-600 text-white';
           } else if (matchedIndex === 1) {
             speakerBadge = `OPPOSITION: ${seatedList[1].name.split(' ')[0]}`;
             badgeColor = 'bg-emerald-600 text-white';
@@ -1973,12 +2121,12 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
             speakerBadge = `SPEAKER ${matchedIndex + 1}: ${seatedList[matchedIndex].name.split(' ')[0]}`;
             badgeColor = 'bg-purple-600 text-white';
           } else {
-            speakerBadge = 'HOST';
-            badgeColor = 'bg-cyan-700 text-white';
+            speakerBadge = 'GUEST SPEAKER';
+            badgeColor = 'bg-indigo-600 text-white';
           }
         } else {
-          speakerBadge = 'HOST';
-          badgeColor = 'bg-cyan-700 text-white';
+          speakerBadge = 'GUEST SPEAKER';
+          badgeColor = 'bg-indigo-600 text-white';
         }
 
         const isOpeningOrLobby = currentPhaseId === 'LOBBY' || currentPhaseId === 'OPENING';
@@ -1992,7 +2140,7 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
         }
 
         return (
-          <div className="w-full max-w-[680px] mt-3 bg-black border border-zinc-700 rounded-xl p-3 shadow-2xl backdrop-blur-md flex items-center gap-3 overflow-hidden">
+          <div className="w-full max-w-[720px] mt-3 bg-black border border-zinc-700 rounded-xl p-3 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 overflow-hidden">
             <div className="flex items-center gap-2 shrink-0">
               <span className={`px-2 py-0.5 ${badgeColor} font-mono font-black text-xs rounded uppercase tracking-wider shadow-sm`}>
                 [{speakerBadge}]
@@ -2008,6 +2156,32 @@ export default function StagePortal({ state, formatTime, onStateUpdate, onExit }
                   {idleCaptionText}
                 </p>
               )}
+            </div>
+
+            {/* Quick Accent & Language Selector Pill on Stage */}
+            <div className="flex items-center gap-1 shrink-0">
+              <select
+                value={session?.transcriptionLanguage || 'en-US'}
+                onChange={(e) => {
+                  const newLang = e.target.value;
+                  const currentSession = session || { id: 'default', transcripts: [] };
+                  onStateUpdate?.({
+                    transcriptionSession: {
+                      ...currentSession,
+                      transcriptionLanguage: newLang
+                    }
+                  });
+                }}
+                className="bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-amber-400 px-1.5 py-1 rounded focus:outline-none focus:border-amber-500 cursor-pointer"
+                title="Switch Speech Recognition Accent Model (British, Australian, American, Indian, etc.)"
+              >
+                <option value="en-US">🇺🇸 US Accent</option>
+                <option value="en-GB">🇬🇧 UK Accent</option>
+                <option value="en-AU">🇦🇺 AU Accent</option>
+                <option value="en-IN">🇮🇳 IN Accent</option>
+                <option value="en-CA">🇨🇦 CA Accent</option>
+                <option value="auto">🌍 Auto Detect</option>
+              </select>
             </div>
           </div>
         );

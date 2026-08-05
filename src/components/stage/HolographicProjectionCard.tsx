@@ -56,13 +56,13 @@ export const HolographicProjectionCard: React.FC<HolographicProjectionCardProps>
     badgeBg = 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300';
     beamGradient = 'from-emerald-400/20 via-emerald-400/5 to-transparent';
   } else if (!isAff) {
-    accentHex = '#ff2a5f'; // Crimson for Opposition
-    borderClass = 'border-rose-500/40';
-    glowClass = 'shadow-[0_0_25px_rgba(255,42,95,0.25)]';
-    textAccentClass = 'text-rose-400';
-    bgGradientClass = 'from-rose-950/30 via-slate-950/80 to-rose-950/20';
-    badgeBg = 'bg-rose-500/15 border-rose-500/30 text-rose-300';
-    beamGradient = 'from-rose-400/20 via-rose-400/5 to-transparent';
+    accentHex = '#f97316'; // Orange for Opposition
+    borderClass = 'border-orange-500/40';
+    glowClass = 'shadow-[0_0_25px_rgba(249,115,22,0.25)]';
+    textAccentClass = 'text-orange-400';
+    bgGradientClass = 'from-orange-950/30 via-slate-950/80 to-orange-950/20';
+    badgeBg = 'bg-orange-500/15 border-orange-500/30 text-orange-300';
+    beamGradient = 'from-orange-400/20 via-orange-400/5 to-transparent';
   }
 
   // Determine image source: custom uploaded/generated image URL, or high-tech dynamic SVG blueprint fallback
@@ -187,7 +187,7 @@ export const HolographicProjectionCard: React.FC<HolographicProjectionCardProps>
         {/* BOTTOM HUD CAPTION BAR */}
         <div className="px-3 py-2 bg-black/70 border-t border-white/10 flex items-center justify-between text-[9px] font-mono font-bold text-gray-300">
           <div className="flex items-center gap-1.5 truncate max-w-[75%]">
-            <span className={`w-1.5 h-1.5 rounded-full animate-ping ${isEvidence ? 'bg-emerald-400' : isAff ? 'bg-cyan-400' : 'bg-rose-400'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full animate-ping ${isEvidence ? 'bg-emerald-400' : isAff ? 'bg-cyan-400' : 'bg-orange-400'}`} />
             <span className="truncate uppercase tracking-wider">{claimText}</span>
           </div>
           <span className={`text-[8.5px] font-extrabold uppercase ${textAccentClass}`}>
@@ -217,7 +217,7 @@ export const HolographicProjectionCard: React.FC<HolographicProjectionCardProps>
               {/* Modal Header */}
               <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-2">
                 <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${isEvidence ? 'bg-emerald-400' : isAff ? 'bg-cyan-400' : 'bg-rose-400'}`} />
+                  <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${isEvidence ? 'bg-emerald-400' : isAff ? 'bg-cyan-400' : 'bg-orange-400'}`} />
                   <h3 className="text-base font-black text-white uppercase tracking-wider">
                     STAGE HOLOGRAPHIC PROJECTION SCHEMATIC
                   </h3>

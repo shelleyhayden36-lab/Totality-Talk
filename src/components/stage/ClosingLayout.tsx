@@ -49,7 +49,7 @@ export default function ClosingLayout({ state, formatTime }: LayoutProps) {
             {/* TRUTH · RESPECT · PERSPECTIVE Slogan */}
             <div className="text-[9.5px] font-black tracking-[0.2em] uppercase max-w-[65%]">
               <span className="text-gray-400">TRUTH · RESPECT · </span>
-              <span className="text-blue-500">PERSPECTIVE</span>
+              <span className="text-cyan-400">PERSPECTIVE</span>
             </div>
 
             {/* Large display titles */}
@@ -60,7 +60,7 @@ export default function ClosingLayout({ state, formatTime }: LayoutProps) {
               <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight leading-none uppercase">
                 DECISION
               </h1>
-              <h1 className="text-3xl md:text-4xl font-black text-blue-500 tracking-tight leading-none uppercase">
+              <h1 className="text-3xl md:text-4xl font-black text-cyan-400 tracking-tight leading-none uppercase">
                 POLL
               </h1>
             </div>
@@ -101,10 +101,10 @@ export default function ClosingLayout({ state, formatTime }: LayoutProps) {
                   </span>
                 </div>
                 <div className="flex flex-col border-l border-gray-800/60">
-                  <span className="text-[8.5px] text-rose-400 font-black uppercase tracking-wider truncate">
+                  <span className="text-[8.5px] text-orange-400 font-black uppercase tracking-wider truncate">
                     {conTeamName}
                   </span>
-                  <span className="text-2xl font-mono font-black text-rose-400 mt-0.5">
+                  <span className="text-2xl font-mono font-black text-orange-400 mt-0.5">
                     {conPct}%
                   </span>
                   <span className="text-[9px] text-gray-500 font-bold">
@@ -121,7 +121,7 @@ export default function ClosingLayout({ state, formatTime }: LayoutProps) {
                 />
                 <div 
                   style={{ width: `${conPct}%` }} 
-                  className="h-full bg-rose-500 transition-all duration-300"
+                  className="h-full bg-orange-500 transition-all duration-300"
                 />
               </div>
             </div>
@@ -138,12 +138,12 @@ export default function ClosingLayout({ state, formatTime }: LayoutProps) {
 
   // STATEMENTS SUBPHASE
   const isAffirmative = activeSpeaker ? activeSpeaker.role === 'PROPOSER' : true;
-  const mainColorClass = isAffirmative ? 'text-blue-500' : 'text-red-500';
-  const pulseColorClass = isAffirmative ? 'border-blue-500/30 bg-blue-500/2' : 'border-red-500/30 bg-red-500/2';
-  const ringDashedClass = isAffirmative ? 'border-blue-500/10' : 'border-red-500/10';
-  const border30Class = isAffirmative ? 'border-blue-500/30' : 'border-red-500/30';
-  const border60Class = isAffirmative ? 'border-blue-500/60' : 'border-red-500/60';
-  const border10Class = isAffirmative ? 'border-blue-500/10' : 'border-red-500/10';
+  const mainColorClass = isAffirmative ? 'text-cyan-400' : 'text-orange-400';
+  const pulseColorClass = isAffirmative ? 'border-cyan-500/30 bg-cyan-500/2' : 'border-orange-500/30 bg-orange-500/2';
+  const ringDashedClass = isAffirmative ? 'border-cyan-500/10' : 'border-orange-500/10';
+  const border30Class = isAffirmative ? 'border-cyan-500/30' : 'border-orange-500/30';
+  const border60Class = isAffirmative ? 'border-cyan-500/60' : 'border-orange-500/60';
+  const border10Class = isAffirmative ? 'border-cyan-500/10' : 'border-orange-500/10';
 
   return (
     <div className="flex flex-col w-full h-full text-left select-none p-5 relative bg-[#07080a] overflow-hidden text-white">

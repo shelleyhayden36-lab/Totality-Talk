@@ -1382,7 +1382,7 @@ export default function App() {
   };
 
   const handleToggleOpeningStatement = (participantId: string) => {
-    if (!state) return;
+    if (!state || state.currentPhase === 'LOBBY') return;
     const isCurrentlyActive = state.showOpeningStatementPopupForParticipantId === participantId || 
                             state.openingStatementVideoPlayingForParticipantId === participantId;
     
@@ -1406,6 +1406,7 @@ export default function App() {
       const updatedSession = {
         ...(state.transcriptionSession || { recordings: [], transcripts: [], extractedClaims: [], highlights: [] }),
         interimTranscript: '',
+        isRecording: true,
         activeTurnStartIndex: currentLen,
         speakerTurnStartIndices: {
           ...(state.transcriptionSession?.speakerTurnStartIndices || {}),
@@ -1623,6 +1624,11 @@ export default function App() {
         isRunning: false
       }
     };
+
+    if (phaseId === 'LOBBY') {
+      updates.showOpeningStatementPopupForParticipantId = null;
+      updates.openingStatementVideoPlayingForParticipantId = null;
+    }
 
     if (phaseId === 'CLOSING') {
       updates.closingSubPhase = 'STATEMENTS';
@@ -1883,18 +1889,29 @@ export default function App() {
 
   const handleAddClaim = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!claimText.trim() || !state.currentSpeakerId || !selectedSpeaker) return;
+    if (!claimText.trim()) return;
+
+    const speakerObj = selectedSpeaker || (state.participants || []).find(p => p.id === state.currentSpeakerId) || (state.participants || [])[0] || { name: 'Host / Moderator', id: 'host', role: 'PROPOSER' };
 
     const text = claimText.trim();
+    const claimId = `claim-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const newClaim: FormalClaim = {
+      claimId,
+      speaker: speakerObj.name,
+      team: speakerObj.role || 'PROPOSER',
+      phase: state.currentPhase || 'OPENING',
+      claimText: text,
+      status: 'pending'
+    };
 
     try {
       const res = await fetch('/api/claims', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          speaker: selectedSpeaker.name,
-          speakerId: selectedSpeaker.id,
-          team: selectedSpeaker.role,
+          speaker: speakerObj.name,
+          speakerId: speakerObj.id,
+          team: speakerObj.role || 'PROPOSER',
           phase: state.currentPhase,
           claimText: text,
           status: 'pending'
@@ -1905,9 +1922,16 @@ export default function App() {
         const updatedState = await res.json();
         setState(updatedState);
         setClaimText('');
+      } else {
+        const updatedFormalClaims = [newClaim, ...(state.formalClaims || [])];
+        updateStateOnServer({ formalClaims: updatedFormalClaims });
+        setClaimText('');
       }
     } catch (err) {
       console.error('Error adding claim:', err);
+      const updatedFormalClaims = [newClaim, ...(state.formalClaims || [])];
+      updateStateOnServer({ formalClaims: updatedFormalClaims });
+      setClaimText('');
     }
   };
 
@@ -1947,24 +1971,42 @@ export default function App() {
   };
 
   const handleAddEvidence = async (claimId: string, text: string, source: string, submittedBy: string) => {
+    if (!text || !text.trim()) return;
+    const finalSource = source && source.trim() ? source.trim() : 'Unspecified Source';
+    const finalSubmittedBy = submittedBy && submittedBy.trim() ? submittedBy.trim() : (selectedSpeaker?.name || 'Anonymous');
+
+    const newEvidence: Evidence = {
+      evidenceId: `evidence-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      claimId: claimId || '',
+      submittedBy: finalSubmittedBy,
+      evidenceText: text.trim(),
+      source: finalSource,
+      status: 'pending'
+    };
+
     try {
       const res = await fetch('/api/evidence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           claimId,
-          submittedBy,
-          evidenceText: text,
-          source,
+          submittedBy: finalSubmittedBy,
+          evidenceText: text.trim(),
+          source: finalSource,
           status: 'pending'
         })
       });
       if (res.ok) {
         const updatedState = await res.json();
         setState(updatedState);
+      } else {
+        const updatedEvidenceList = [...(state.evidenceList || []), newEvidence];
+        updateStateOnServer({ evidenceList: updatedEvidenceList });
       }
     } catch (err) {
       console.error('Error adding evidence:', err);
+      const updatedEvidenceList = [...(state.evidenceList || []), newEvidence];
+      updateStateOnServer({ evidenceList: updatedEvidenceList });
     }
   };
 
@@ -3006,69 +3048,71 @@ export default function App() {
             </button>
           ))}
 
-          {/* Dedicated Opening Statement Button */}
-          <div className="relative">
-            <button
-              id="opening-statement-trigger-btn"
-              onClick={() => setShowOpeningStatementDropdown(!showOpeningStatementDropdown)}
-              className={`px-3 py-1.5 rounded text-xs font-black tracking-wider transition-all cursor-pointer uppercase flex items-center gap-1.5 border ${
-                state.showOpeningStatementPopupForParticipantId || state.openingStatementVideoPlayingForParticipantId
-                  ? 'bg-[#f97316] text-white border-transparent'
-                  : 'text-[#f97316]/90 border-[#f97316]/20 bg-[#f97316]/5 hover:bg-[#f97316]/10 hover:text-white'
-              }`}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Opening Statement</span>
-            </button>
+          {/* Dedicated Opening Statement Button - only outside LOBBY */}
+          {state.currentPhase !== 'LOBBY' && (
+            <div className="relative">
+              <button
+                id="opening-statement-trigger-btn"
+                onClick={() => setShowOpeningStatementDropdown(!showOpeningStatementDropdown)}
+                className={`px-3 py-1.5 rounded text-xs font-black tracking-wider transition-all cursor-pointer uppercase flex items-center gap-1.5 border ${
+                  state.showOpeningStatementPopupForParticipantId || state.openingStatementVideoPlayingForParticipantId
+                    ? 'bg-[#f97316] text-white border-transparent'
+                    : 'text-[#f97316]/90 border-[#f97316]/20 bg-[#f97316]/5 hover:bg-[#f97316]/10 hover:text-white'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Opening Statement</span>
+              </button>
 
-            {showOpeningStatementDropdown && (
-              <div className="absolute left-0 mt-2 w-56 bg-[#16171d] border border-[#1d1e24] rounded-lg shadow-xl z-50 py-1">
-                <div className="px-3 py-1.5 border-b border-[#1d1e24] text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                  Select Seated Participant
-                </div>
-                {state.participants.filter(p => p.isSeated && p.status !== 'pending').length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-gray-400 italic">
-                    No seated participants
+              {showOpeningStatementDropdown && (
+                <div className="absolute left-0 mt-2 w-56 bg-[#16171d] border border-[#1d1e24] rounded-lg shadow-xl z-50 py-1">
+                  <div className="px-3 py-1.5 border-b border-[#1d1e24] text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                    Select Seated Participant
                   </div>
-                ) : (
-                  state.participants
-                    .filter(p => p.isSeated && p.status !== 'pending')
-                    .map((p) => {
-                      const isActive = state.showOpeningStatementPopupForParticipantId === p.id || 
-                                     state.openingStatementVideoPlayingForParticipantId === p.id;
-                      return (
-                        <button
-                          key={p.id}
-                          onClick={() => {
-                            handleToggleOpeningStatement(p.id);
-                            setShowOpeningStatementDropdown(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-xs font-bold flex items-center justify-between hover:bg-[#20222a] transition-colors ${
-                            isActive ? 'text-[#f97316]' : 'text-gray-300'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 truncate max-w-[130px]">
-                            <span className="truncate">{p.name}</span>
-                            {p.agreedToDisclosure ? (
-                              <span className="text-[9px] text-emerald-400 font-bold" title="Agreed to Disclosure">✓</span>
-                            ) : (
-                              <span className="text-[9px] text-amber-400 font-bold" title="Needs Disclosure Agreement">⚠️</span>
-                            )}
-                          </div>
-                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${
-                            p.role === 'PROPOSER' 
-                              ? 'bg-emerald-500/10 text-emerald-400' 
-                              : 'bg-red-500/10 text-red-400'
-                          }`}>
-                            {p.role === 'PROPOSER' ? 'Pro' : 'Con'}
-                          </span>
-                        </button>
-                      );
-                    })
-                )}
-              </div>
-            )}
-          </div>
+                  {state.participants.filter(p => p.isSeated && p.status !== 'pending').length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-gray-400 italic">
+                      No seated participants
+                    </div>
+                  ) : (
+                    state.participants
+                      .filter(p => p.isSeated && p.status !== 'pending')
+                      .map((p) => {
+                        const isActive = state.showOpeningStatementPopupForParticipantId === p.id || 
+                                       state.openingStatementVideoPlayingForParticipantId === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              handleToggleOpeningStatement(p.id);
+                              setShowOpeningStatementDropdown(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs font-bold flex items-center justify-between hover:bg-[#20222a] transition-colors ${
+                              isActive ? 'text-[#f97316]' : 'text-gray-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 truncate max-w-[130px]">
+                              <span className="truncate">{p.name}</span>
+                              {p.agreedToDisclosure ? (
+                                <span className="text-[9px] text-emerald-400 font-bold" title="Agreed to Disclosure">✓</span>
+                              ) : (
+                                <span className="text-[9px] text-amber-400 font-bold" title="Needs Disclosure Agreement">⚠️</span>
+                              )}
+                            </div>
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${
+                              p.role === 'PROPOSER' 
+                                ? 'bg-emerald-500/10 text-emerald-400' 
+                                : 'bg-red-500/10 text-red-400'
+                            }`}>
+                              {p.role === 'PROPOSER' ? 'Pro' : 'Con'}
+                            </span>
+                          </button>
+                        );
+                      })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Center Timer Widget */}
@@ -3511,7 +3555,7 @@ export default function App() {
                               </div>
                               
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {p.isSeated && (() => {
+                                {p.isSeated && state.currentPhase !== 'LOBBY' && (() => {
                                   const isActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
                                   return (
                                     <button
@@ -3689,7 +3733,7 @@ export default function App() {
                               </div>
                               
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {p.isSeated && (() => {
+                                {p.isSeated && state.currentPhase !== 'LOBBY' && (() => {
                                   const isActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
                                   return (
                                     <button
@@ -3870,7 +3914,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex items-center gap-1.5 opacity-85 group-hover:opacity-100 shrink-0">
-                                  {p.isSeated && (() => {
+                                  {p.isSeated && state.currentPhase !== 'LOBBY' && (() => {
                                     const isStatementActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
                                     const isSpeechActive = state?.activeDisclosureParticipantId === p.id;
                                     return (
@@ -4060,7 +4104,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex items-center gap-1.5 opacity-85 group-hover:opacity-100 shrink-0">
-                                  {p.isSeated && (() => {
+                                  {p.isSeated && state.currentPhase !== 'LOBBY' && (() => {
                                     const isStatementActive = state?.showOpeningStatementPopupForParticipantId === p.id || state?.openingStatementVideoPlayingForParticipantId === p.id;
                                     const isSpeechActive = state?.activeDisclosureParticipantId === p.id;
                                     return (
@@ -6239,6 +6283,25 @@ export default function App() {
                         </span>
                       </div>
 
+                      {/* Manual Claim Input inside Timeline */}
+                      <form onSubmit={handleAddClaim} className="flex gap-2 shrink-0 mb-3">
+                        <input
+                          type="text"
+                          placeholder="Type a new claim statement to log..."
+                          value={claimText}
+                          onChange={(e) => setClaimText(e.target.value)}
+                          className="flex-1 bg-[#16171d] border border-[#2d2f39] text-xs text-white placeholder-gray-500 px-3 py-2 rounded-lg focus:outline-none focus:border-[#f97316] font-semibold"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!claimText.trim()}
+                          className="bg-[#f97316] hover:bg-[#ea580c] disabled:opacity-50 text-white font-bold text-xs px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Add Claim</span>
+                        </button>
+                      </form>
+
                       <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3">
                       {!state.formalClaims || state.formalClaims.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-center p-8 gap-2">
@@ -6392,11 +6455,11 @@ export default function App() {
                                 <form 
                                   onSubmit={(e) => {
                                     e.preventDefault();
-                                    if (!manualEvidenceText.trim() || !manualEvidenceSource.trim()) return;
+                                    if (!manualEvidenceText.trim()) return;
                                     handleAddEvidence(
                                       claim.claimId, 
                                       manualEvidenceText.trim(), 
-                                      manualEvidenceSource.trim(), 
+                                      manualEvidenceSource.trim() || 'Unspecified Source', 
                                       manualEvidenceSubmittedBy.trim() || selectedSpeaker?.name || 'Anonymous'
                                     );
                                     // Reset states
@@ -6427,8 +6490,7 @@ export default function App() {
                                   <div className="grid grid-cols-2 gap-2">
                                     <input
                                       type="text"
-                                      required
-                                      placeholder="Source (e.g. Cochrane Review)"
+                                      placeholder="Source (e.g. Cochrane Review, optional)"
                                       value={manualEvidenceSource}
                                       onChange={(e) => setManualEvidenceSource(e.target.value)}
                                       className="bg-[#0d0e10] border border-[#2d2f39] text-xs text-white px-2.5 py-1.5 rounded focus:outline-none focus:border-[#f97316] font-semibold"
@@ -7056,11 +7118,11 @@ export default function App() {
                               <form 
                                 onSubmit={(e) => {
                                   e.preventDefault();
-                                  if (!manualEvidenceText.trim() || !manualEvidenceSource.trim()) return;
+                                  if (!manualEvidenceText.trim()) return;
                                   handleAddEvidence(
                                     claim.claimId, 
                                     manualEvidenceText.trim(), 
-                                    manualEvidenceSource.trim(), 
+                                    manualEvidenceSource.trim() || 'Unspecified Source', 
                                     manualEvidenceSubmittedBy.trim() || selectedSpeaker?.name || 'Anonymous'
                                   );
                                   setManualEvidenceText('');
@@ -7086,8 +7148,7 @@ export default function App() {
                                 <div className="grid grid-cols-2 gap-2">
                                   <input
                                     type="text"
-                                    required
-                                    placeholder="Source (e.g. Cochrane Review)"
+                                    placeholder="Source (e.g. Cochrane Review, optional)"
                                     value={manualEvidenceSource}
                                     onChange={(e) => setManualEvidenceSource(e.target.value)}
                                     className="bg-[#0d0e10] border border-[#2d2f39] text-xs text-white px-2.5 py-1.5 rounded focus:outline-none focus:border-[#f97316] font-semibold"
@@ -10860,6 +10921,7 @@ export default function App() {
             formatTime={formatTime} 
             onStateUpdate={updateStateOnServer} 
             onExit={() => setShowHostStageOverlay(false)} 
+            suppressAudio={true}
           />
         </div>
       )}

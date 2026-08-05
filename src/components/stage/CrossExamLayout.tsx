@@ -39,12 +39,12 @@ export default function CrossExamLayout({ state, formatTime, onStateUpdate }: La
     ? highlightedSpeaker.name.replace('@', '').charAt(0).toUpperCase() 
     : 'T';
 
-  const mainColorClass = isAffirmative ? 'text-blue-500' : 'text-red-500';
-  const pulseColorClass = isAffirmative ? 'border-blue-500/30 bg-blue-500/2' : 'border-red-500/30 bg-red-500/2';
-  const ringDashedClass = isAffirmative ? 'border-blue-500/10' : 'border-red-500/10';
-  const border30Class = isAffirmative ? 'border-blue-500/30' : 'border-red-500/30';
-  const border60Class = isAffirmative ? 'border-blue-500/60' : 'border-red-500/60';
-  const border10Class = isAffirmative ? 'border-blue-500/10' : 'border-red-500/10';
+  const mainColorClass = isAffirmative ? 'text-cyan-400' : 'text-orange-400';
+  const pulseColorClass = isAffirmative ? 'border-cyan-500/30 bg-cyan-500/2' : 'border-orange-500/30 bg-orange-500/2';
+  const ringDashedClass = isAffirmative ? 'border-cyan-500/10' : 'border-orange-500/10';
+  const border30Class = isAffirmative ? 'border-cyan-500/30' : 'border-orange-500/30';
+  const border60Class = isAffirmative ? 'border-cyan-500/60' : 'border-orange-500/60';
+  const border10Class = isAffirmative ? 'border-cyan-500/10' : 'border-orange-500/10';
 
   // Toggle subphase handler (Questioner <-> Respondent)
   const handleToggleSubPhase = () => {

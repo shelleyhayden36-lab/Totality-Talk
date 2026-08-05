@@ -201,10 +201,10 @@ export default function CreditsLayout({ state }: LayoutProps) {
           {/* Section 7: Audience Questions */}
           {questionContributors.length > 0 && (
             <div className="flex flex-col gap-1.5 items-center">
-              <span className="text-[9px] text-blue-400 font-black uppercase tracking-widest">Audience Contributors</span>
+              <span className="text-[9px] text-cyan-400 font-black uppercase tracking-widest">Audience Contributors</span>
               <div className="flex flex-wrap items-center justify-center gap-1 max-w-xs">
                 {questionContributors.map((q, i) => (
-                  <span key={i} className="text-[10px] font-bold text-gray-300 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full">
+                  <span key={i} className="text-[10px] font-bold text-gray-300 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
                     {q}
                   </span>
                 ))}

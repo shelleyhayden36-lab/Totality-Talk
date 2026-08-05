@@ -48,8 +48,8 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
     teamType: 'PROPOSER',
     title: `TEAM ${proTeamLabel.toUpperCase()} ROSTER`,
     teamLabel: proTeamLabel,
-    colorClass: 'text-blue-400',
-    borderColorClass: 'border-blue-500/30',
+    colorClass: 'text-cyan-400',
+    borderColorClass: 'border-cyan-500/30',
     members: seatedPro
   });
 
@@ -61,8 +61,8 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
     teamType: 'CONTRARY',
     title: `TEAM ${conTeamLabel.toUpperCase()} ROSTER`,
     teamLabel: conTeamLabel,
-    colorClass: 'text-red-400',
-    borderColorClass: 'border-red-500/30',
+    colorClass: 'text-orange-400',
+    borderColorClass: 'border-orange-500/30',
     members: seatedCon
   });
 
@@ -108,7 +108,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
           {/* TRUTH · RESPECT · PERSPECTIVE Slogan */}
           <div className="text-[9px] font-black tracking-[0.2em] uppercase">
             <span className="text-gray-400">TRUTH · RESPECT · </span>
-            <span className="text-blue-500">PERSPECTIVE</span>
+            <span className="text-cyan-400">PERSPECTIVE</span>
           </div>
 
           {/* Animated OPEN DEBATE Badge */}
@@ -134,7 +134,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
         <div className="flex items-center justify-between mt-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-black text-gray-300 tracking-wider uppercase bg-[#14161f] border border-gray-800/80 px-2.5 py-1 rounded-lg">
-              LOBBY <span className="text-blue-500">STANDBY</span>
+              LOBBY <span className="text-cyan-400">STANDBY</span>
             </span>
             <span className="text-[9.5px] font-bold text-gray-500 tracking-widest uppercase">
               TOTALITY TALK
@@ -147,10 +147,10 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
       </div>
 
       {/* 2. ALWAYS VISIBLE DEBATE PROMPT HEADER (TOP OF MAIN BODY) */}
-      <div className="bg-gradient-to-r from-[#12141c] via-[#161926] to-[#12141c] border border-blue-500/30 p-3 sm:p-3.5 rounded-xl shadow-xl text-center shrink-0 relative overflow-hidden">
+      <div className="bg-gradient-to-r from-[#12141c] via-[#161926] to-[#12141c] border border-cyan-500/30 p-3 sm:p-3.5 rounded-xl shadow-xl text-center shrink-0 relative overflow-hidden">
         <div className="flex items-center justify-center gap-2 mb-0.5">
-          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
-          <span className="text-[10px] font-black tracking-widest text-blue-400 uppercase">
+          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+          <span className="text-[10px] font-black tracking-widest text-cyan-400 uppercase">
             DEBATE TOPIC & PROMPT
           </span>
         </div>
@@ -167,7 +167,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
             <motion.div 
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              className="relative flex flex-col justify-center items-center rounded-xl overflow-hidden border border-blue-500/40 shadow-[0_0_25px_rgba(59,130,246,0.25)] bg-black/80 p-2.5 h-full min-h-[180px]"
+              className="relative flex flex-col justify-center items-center rounded-xl overflow-hidden border border-cyan-500/40 shadow-[0_0_25px_rgba(6,182,212,0.25)] bg-black/80 p-2.5 h-full min-h-[180px]"
             >
               {/* Image Container with contain fit */}
               <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-lg">
@@ -181,7 +181,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                 <motion.div 
                   className="absolute inset-0 pointer-events-none z-10"
                   style={{
-                    background: 'linear-gradient(to bottom, transparent 0%, rgba(59, 130, 246, 0.45) 50%, transparent 100%)',
+                    background: 'linear-gradient(to bottom, transparent 0%, rgba(6, 182, 212, 0.45) 50%, transparent 100%)',
                     height: '25%',
                   }}
                   animate={{ top: ['-30%', '100%'] }}
@@ -192,7 +192,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                 <div 
                   className="absolute inset-0 pointer-events-none opacity-30 z-10 rounded-lg"
                   style={{
-                    backgroundImage: 'linear-gradient(to bottom, rgba(59, 130, 246, 0.3) 1px, transparent 1px)',
+                    backgroundImage: 'linear-gradient(to bottom, rgba(6, 182, 212, 0.3) 1px, transparent 1px)',
                     backgroundSize: '100% 4px'
                   }}
                 />
@@ -205,13 +205,11 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                 />
               </div>
 
-
-
               {/* CORNER HUD TECH ACCENTS */}
-              <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-blue-400/80 z-20 pointer-events-none" />
-              <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-blue-400/80 z-20 pointer-events-none" />
-              <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-blue-400/80 z-20 pointer-events-none" />
-              <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-blue-400/80 z-20 pointer-events-none" />
+              <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-cyan-400/80 z-20 pointer-events-none" />
+              <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-cyan-400/80 z-20 pointer-events-none" />
+              <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-cyan-400/80 z-20 pointer-events-none" />
+              <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-cyan-400/80 z-20 pointer-events-none" />
             </motion.div>
 
             {/* RIGHT COLUMN: SCROLLING TEAM SPOTS & ROLES CYCLING SECTION */}
@@ -223,12 +221,12 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -8, scale: 0.99 }}
                   transition={{ duration: 0.4, ease: 'easeOut' }}
-                  className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-blue-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
+                  className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-cyan-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
                 >
                   {/* Ambient Glow */}
                   <div className={`absolute -top-10 -right-10 w-28 h-28 rounded-full blur-3xl pointer-events-none ${
                     currentSlide?.type === 'team'
-                      ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500/15' : 'bg-red-500/15'
+                      ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-500/15' : 'bg-orange-500/15'
                       : 'bg-amber-500/15'
                   }`}></div>
 
@@ -237,12 +235,12 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                     <div className="flex items-center gap-2">
                       <span className={`h-2 w-2 rounded-full animate-pulse ${
                         currentSlide?.type === 'team'
-                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-500'
                           : 'bg-amber-500'
                       }`}></span>
                       <span className={`text-[11px] font-black tracking-widest uppercase ${
                         currentSlide?.type === 'team'
-                          ? currentSlide.teamType === 'PROPOSER' ? 'text-blue-400' : 'text-red-400'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'text-cyan-400' : 'text-orange-400'
                           : 'text-amber-400'
                       }`}>
                         {currentSlide?.title}
@@ -261,13 +259,13 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                       <div className="flex flex-col gap-2.5 h-full justify-center">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                            <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-blue-400' : 'bg-red-400'}`}></span>
+                            <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-400'}`}></span>
                             <span>{currentSlide.teamLabel} Speaker Lineup</span>
                           </span>
                           <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded border ${
                             currentSlide.teamType === 'PROPOSER' 
-                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
-                              : 'bg-red-500/10 text-red-400 border-red-500/20'
+                              ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' 
+                              : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
                           }`}>
                             {currentSlide.members?.length || 0} / {currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax} Seated
                           </span>
@@ -283,8 +281,8 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                                 className={`p-3 rounded-xl border flex flex-col justify-between min-h-[60px] ${
                                   member 
                                     ? currentSlide.teamType === 'PROPOSER'
-                                      ? 'bg-blue-950/40 border-blue-500/40 text-blue-200'
-                                      : 'bg-red-950/40 border-red-500/40 text-red-200'
+                                      ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-200'
+                                      : 'bg-orange-950/40 border-orange-500/40 text-orange-200'
                                     : 'bg-[#10121a]/50 border-dashed border-gray-800 text-gray-500'
                                 }`}
                               >
@@ -346,7 +344,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                       transition={{ duration: (currentSlide?.duration || 10000) / 1000, ease: "linear" }}
                       className={`h-full ${
                         currentSlide?.type === 'team'
-                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                          ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-500'
                           : 'bg-amber-500'
                       }`}
                     />
@@ -365,12 +363,12 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -8, scale: 0.99 }}
                 transition={{ duration: 0.4, ease: 'easeOut' }}
-                className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-blue-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
+                className="bg-gradient-to-br from-[#12141c]/90 to-[#0d0e14]/90 border border-cyan-500/20 p-4 rounded-xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between"
               >
                 {/* Ambient Glow */}
                 <div className={`absolute -top-10 -right-10 w-28 h-28 rounded-full blur-3xl pointer-events-none ${
                   currentSlide?.type === 'team'
-                    ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500/15' : 'bg-red-500/15'
+                    ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-500/15' : 'bg-orange-500/15'
                     : 'bg-amber-500/15'
                 }`}></div>
 
@@ -379,12 +377,12 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                   <div className="flex items-center gap-2">
                     <span className={`h-2 w-2 rounded-full animate-pulse ${
                       currentSlide?.type === 'team'
-                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-500'
                         : 'bg-amber-500'
                     }`}></span>
                     <span className={`text-[11px] font-black tracking-widest uppercase ${
                       currentSlide?.type === 'team'
-                        ? currentSlide.teamType === 'PROPOSER' ? 'text-blue-400' : 'text-red-400'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'text-cyan-400' : 'text-orange-400'
                         : 'text-amber-400'
                     }`}>
                       {currentSlide?.title}
@@ -403,13 +401,13 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                     <div className="flex flex-col gap-2.5 h-full justify-center">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-blue-400' : 'bg-red-400'}`}></span>
+                          <span className={`w-2 h-2 rounded-full ${currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-400'}`}></span>
                           <span>{currentSlide.teamLabel} Speaker Lineup</span>
                         </span>
                         <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded border ${
                           currentSlide.teamType === 'PROPOSER' 
-                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
-                            : 'bg-red-500/10 text-red-400 border-red-500/20'
+                            ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' 
+                            : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
                         }`}>
                           {currentSlide.members?.length || 0} / {currentSlide.teamType === 'PROPOSER' ? proSeatsMax : conSeatsMax} Seated
                         </span>
@@ -425,8 +423,8 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                               className={`p-3 rounded-xl border flex flex-col justify-between min-h-[60px] ${
                                 member 
                                   ? currentSlide.teamType === 'PROPOSER'
-                                    ? 'bg-blue-950/40 border-blue-500/40 text-blue-200'
-                                    : 'bg-red-950/40 border-red-500/40 text-red-200'
+                                    ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-200'
+                                    : 'bg-orange-950/40 border-orange-500/40 text-orange-200'
                                   : 'bg-[#10121a]/50 border-dashed border-gray-800 text-gray-500'
                               }`}
                             >
@@ -488,7 +486,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
                     transition={{ duration: (currentSlide?.duration || 10000) / 1000, ease: "linear" }}
                     className={`h-full ${
                       currentSlide?.type === 'team'
-                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-blue-500' : 'bg-red-500'
+                        ? currentSlide.teamType === 'PROPOSER' ? 'bg-cyan-400' : 'bg-orange-500'
                         : 'bg-amber-500'
                     }`}
                   />
@@ -508,7 +506,7 @@ export default function LobbyLayout({ state, formatTime }: LayoutProps) {
             className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
               idx === activeSlideIndex 
                 ? s.type === 'team' 
-                  ? s.teamType === 'PROPOSER' ? 'w-5 bg-blue-500' : 'w-5 bg-red-500'
+                  ? s.teamType === 'PROPOSER' ? 'w-5 bg-cyan-400' : 'w-5 bg-orange-500'
                   : 'w-5 bg-amber-500'
                 : 'w-1.5 bg-gray-800 hover:bg-gray-700'
             }`}

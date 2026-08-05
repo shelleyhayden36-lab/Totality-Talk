@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { runResearchPipeline } from "./src/lib/researchPipeline";
 
@@ -2701,26 +2702,6 @@ Perform a rigorous evaluation and output exactly the specified JSON structure.`;
       return res.status(400).json({ error: "Transcripts array is required." });
     }
 
-    const isClaimPhase = (p?: string) => {
-      if (!p) return true;
-      const upper = p.toUpperCase();
-      return upper.includes("OPEN") || upper.includes("REBUT");
-    };
-
-    // Filter transcripts to Opening Statements & Rebuttal phases only
-    const claimTranscripts = transcripts.filter((t: any) => {
-      const p = (t.phaseId || t.phaseName || t.phase || "").toUpperCase();
-      if (!p) return true;
-      return isClaimPhase(p);
-    });
-
-    if (claimTranscripts.length === 0 || (currentPhase && !isClaimPhase(currentPhase))) {
-      return res.json({
-        claims: [],
-        note: "Claims are only extracted during Opening Statements and Rebuttal phases. Cross-Examination, Chat Questions, Highlights, Lobby, and Closing phases are excluded."
-      });
-    }
-
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -2737,12 +2718,10 @@ Perform a rigorous evaluation and output exactly the specified JSON structure.`;
         }
       });
 
-      const rawTranscriptText = claimTranscripts.map((t: any) => `[${t.formattedTime || '00:00'}] ${t.speaker || 'Speaker'}: ${t.text}`).join("\n");
+      const rawTranscriptText = transcripts.map((t: any) => `[${t.formattedTime || '00:00'}] ${t.speaker || 'Speaker'} (${t.phaseId || t.phaseName || currentPhase || 'Debate'}): ${t.text}`).join("\n");
 
-      const prompt = `Analyze the following debate transcript and extract all distinct, explicit debate claims or factual assertions made by speakers.
+      const prompt = `Analyze the following debate transcript and extract all distinct, explicit debate claims or factual assertions made by speakers across any speech phase (Opening Statements, Prosecution, Cross-Examination, Rebuttal, Summation, Closing, Floor, etc.).
 
-STRICT PHASE RULE: You MUST ONLY extract claims made during Opening Statements or Rebuttal speech phases.
-Do NOT extract claims from cross-examination, chat questions, lobby chatter, highlights, or closing statements.
 CRITICAL CONSTRAINT: Do NOT invent, paraphrase wildly, or fabricate claims. Only extract assertions explicitly stated in the transcript text.
 
 For each extracted claim, provide:
@@ -2904,6 +2883,194 @@ ${rawTranscriptText}`;
     }
   });
 
+  // Helper to wrap raw 24000Hz 16-bit mono PCM into a standard WAV Buffer
+  function pcmToWav(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitDepth = 16): Buffer {
+    const dataSize = pcmBuffer.length;
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0);
+    header.writeUInt32LE(36 + dataSize, 4);
+    header.write("WAVE", 8);
+    header.write("fmt ", 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(numChannels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * numChannels * (bitDepth / 8), 28);
+    header.writeUInt16LE(numChannels * (bitDepth / 8), 32);
+    header.writeUInt16LE(bitDepth, 34);
+    header.write("data", 36);
+    header.writeUInt32LE(dataSize, 40);
+    return Buffer.concat([header, pcmBuffer]);
+  }
+
+  // Persistent Disk Cache for TTS AI Voiceovers
+  const ttsCacheDir = path.join(process.cwd(), 'audio_cache');
+  if (!fs.existsSync(ttsCacheDir)) {
+    try { fs.mkdirSync(ttsCacheDir, { recursive: true }); } catch (e) {}
+  }
+  const ttsCacheMap = new Map<string, Buffer>();
+
+  // AI Voiceover Text-To-Speech Endpoint using Gemini API with Disk Cache & Fallback to Web Speech
+  app.post("/api/tts", async (req, res) => {
+    try {
+      const { text, voiceName = "Aoede" } = req.body;
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({ error: "text parameter is required." });
+      }
+
+      const textHash = crypto.createHash('sha256').update(`v2_${voiceName.toLowerCase()}_${text.trim()}`).digest('hex').substring(0, 32);
+      const safeFileName = `tts_${voiceName.toLowerCase()}_${textHash}.wav`;
+      const diskPath = path.join(ttsCacheDir, safeFileName);
+
+      // 1. Check disk file cache (valid WAV files only)
+      if (fs.existsSync(diskPath)) {
+        try {
+          const cachedWav = fs.readFileSync(diskPath);
+          if (cachedWav.length > 2000) {
+            res.setHeader("Content-Type", "audio/wav");
+            res.setHeader("Content-Length", cachedWav.length.toString());
+            return res.send(cachedWav);
+          } else {
+            // Delete corrupt/small cached file
+            try { fs.unlinkSync(diskPath); } catch (e) {}
+          }
+        } catch (readErr) {
+          console.warn("[TTS] Error reading disk cache file:", readErr);
+        }
+      }
+
+      // 2. Check memory cache
+      const cacheKey = `${voiceName}:${text.trim()}`;
+      if (ttsCacheMap.has(cacheKey)) {
+        const cachedWav = ttsCacheMap.get(cacheKey)!;
+        if (cachedWav.length > 2000) {
+          res.setHeader("Content-Type", "audio/wav");
+          res.setHeader("Content-Length", cachedWav.length.toString());
+          return res.send(cachedWav);
+        }
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(503).json({ error: "GEMINI_API_KEY is not configured on server." });
+      }
+
+      let wavBuffer: Buffer | null = null;
+      const { GoogleGenAI, Modality } = await import("@google/genai");
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      // Chunk long text into smaller ~500-char segments for reliable TTS generation without token cap issues
+      const maxChunkLen = 500;
+      const textChunks: string[] = [];
+      if (text.length <= maxChunkLen) {
+        textChunks.push(text);
+      } else {
+        const lines = text.split('\n');
+        let currentChunk = '';
+        for (const line of lines) {
+          if ((currentChunk + '\n' + line).length > maxChunkLen) {
+            if (currentChunk.trim()) textChunks.push(currentChunk.trim());
+            currentChunk = line;
+          } else {
+            currentChunk = currentChunk ? (currentChunk + '\n' + line) : line;
+          }
+        }
+        if (currentChunk.trim()) textChunks.push(currentChunk.trim());
+      }
+
+      const candidateModels = [
+        "gemini-3.1-flash-tts-preview"
+      ];
+
+      for (const ttsModel of candidateModels) {
+        if (wavBuffer) break;
+        const pcmBuffers: Buffer[] = [];
+
+        for (const chunk of textChunks) {
+          let chunkAudioSuccess = false;
+
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const response = await ai.models.generateContent({
+                model: ttsModel,
+                contents: [{ parts: [{ text: chunk }] }],
+                config: {
+                  responseModalities: [Modality.AUDIO || 'AUDIO'],
+                  speechConfig: {
+                    voiceConfig: {
+                      prebuiltVoiceConfig: { voiceName: voiceName || 'Aoede' },
+                    },
+                  },
+                },
+              });
+
+              const audioPart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData && p.inlineData.data);
+              const base64Audio = audioPart?.inlineData?.data;
+              const mimeType = (audioPart?.inlineData?.mimeType || '').toLowerCase();
+
+              if (base64Audio) {
+                const rawBuffer = Buffer.from(base64Audio, "base64");
+                // If already WAV or MP3, use directly; if PCM, convert
+                if (mimeType.includes("wav") || mimeType.includes("mp3") || mimeType.includes("mpeg")) {
+                  wavBuffer = rawBuffer;
+                } else {
+                  pcmBuffers.push(rawBuffer);
+                }
+                chunkAudioSuccess = true;
+                break;
+              }
+            } catch (attemptErr: any) {
+              const isQuotaExceeded = attemptErr?.status === 429 || attemptErr?.message?.includes("429") || attemptErr?.message?.includes("Quota exceeded") || attemptErr?.message?.includes("RESOURCE_EXHAUSTED");
+              if (isQuotaExceeded) {
+                console.info("[TTS] Free tier quota reached for Gemini TTS. Triggering Web Speech fallback.");
+                break; // Quota exceeded, break immediately without retrying to trigger instant client Web Speech fallback
+              } else {
+                console.info(`[TTS] Attempt ${attempt + 1} with model ${ttsModel} info:`, attemptErr?.message || attemptErr);
+              }
+              const isTransient = attemptErr?.status === 503 || attemptErr?.message?.includes("503") || attemptErr?.message?.includes("high demand");
+              if (isTransient && attempt < 2) {
+                await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+                continue;
+              }
+            }
+          }
+
+          if (!chunkAudioSuccess) {
+            break;
+          }
+        }
+
+        if (pcmBuffers.length === textChunks.length && pcmBuffers.length > 0) {
+          const combinedPcm = Buffer.concat(pcmBuffers);
+          wavBuffer = pcmToWav(combinedPcm, 24000, 1, 16);
+        }
+      }
+
+      if (!wavBuffer) {
+        console.info("[TTS] AI voiceover unavailable, returning fallback status for client Web Speech.");
+        return res.status(503).json({ error: "AI_TTS_UNAVAILABLE", fallback: true, message: "AI TTS voiceover temporarily unavailable, using client Web Speech." });
+      }
+
+      // Save valid WAV to disk & memory cache
+      try { fs.writeFileSync(diskPath, wavBuffer); } catch (e) {}
+      ttsCacheMap.set(cacheKey, wavBuffer);
+
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Content-Length", wavBuffer.length.toString());
+      return res.send(wavBuffer);
+    } catch (err: any) {
+      console.error("AI TTS endpoint fatal error:", err);
+      return res.status(503).json({ error: err.message || "TTS generation failed." });
+    }
+  });
+
   // Persistent Audio Recording Storage Setup
   const audioStorageDir = path.join(process.cwd(), 'audio_storage');
   if (!fs.existsSync(audioStorageDir)) {
@@ -2993,11 +3160,6 @@ ${rawTranscriptText}`;
       return res.status(400).json({ error: "audioDataUri parameter is required." });
     }
 
-    const isClaimPhaseActive = !currentPhase || (
-      currentPhase.toUpperCase().includes("OPEN") || 
-      currentPhase.toUpperCase().includes("REBUT")
-    );
-
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -3066,7 +3228,9 @@ ${rawTranscriptText}`;
       const prompt = `Listen to this debate audio recording ("${title || "Saved Recording"}").
 Tasks:
 1. Transcribe the speech line-by-line with accurate timestamps and likely speaker names.
-2. Extract all distinct explicit debate claims or factual assertions made in the recording ONLY IF this audio is from Opening Statements or Rebuttal phases. If this recording is from Cross-Examination, Chat Questions, Highlights, Lobby, or Closing statements, do NOT extract claims and return an empty claims array [].
+   - Pay special attention to international accents (British, Australian, American, Indian, Canadian, etc.), dialectical phrasing, and fast spoken debate cadence. Ensure misheard homophones or accent distortions are transcribed into coherent, grammatically correct text.
+   - If the speech is in a non-English language, provide a line-by-line English translation.
+2. Extract all distinct explicit debate claims or factual assertions made in the recording across all speech phases (Opening Statements, Prosecution, Cross-Examination, Rebuttal, Summation, Closing, Floor, etc.).
 
 Do NOT fabricate claims. Only extract assertions explicitly stated in the speech.`;
 
@@ -3122,9 +3286,6 @@ Do NOT fabricate claims. Only extract assertions explicitly stated in the speech
       });
 
       const parsed = JSON.parse(response.text || "{}");
-      if (!isClaimPhaseActive) {
-        parsed.claims = [];
-      }
       return res.json(parsed);
     } catch (err: any) {
       console.log("AI Audio Transcription Fallback activated:", err.message);
@@ -3147,6 +3308,58 @@ Do NOT fabricate claims. Only extract assertions explicitly stated in the speech
           }
         ]
       });
+    }
+  });
+
+  // AI Live Transcript Accent Corrector & Smoother
+  app.post("/api/transcription/smooth-text", async (req, res) => {
+    const { text, accent, language } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "text parameter is required." });
+    }
+
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.json({ smoothedText: text });
+      }
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const targetAccentContext = (!accent || accent === 'auto')
+        ? 'Auto-detected global speaker accent (British UK, Australian, American, Indian, Canadian, Irish, foreign accents, or non-English speech)'
+        : accent;
+
+      const prompt = `You are an AI live broadcast transcript editor and multi-accent speech recognizer.
+Task: Process this raw live speech-to-text transcript from a debate speaker. Accent setting: ${targetAccentContext}.
+
+Instructions:
+1. Automatically infer the speaker's accent/dialect/vocabulary from speech patterns and phonetics (e.g., British UK English, Australian English, US English, Indian English, Canadian English, Caribbean, or international accents).
+2. Correct phonetically misheard accent words (e.g., British "shed-yool" -> "schedule", Australian vowel shifts, dropped consonants, missing articles, or repeated stuttered words).
+3. If the speech is spoken in a non-English language, translate it directly into fluent English.
+4. Capitalize correctly and add ending punctuation. Preserve verbatim intent and tone without summarizing.
+5. Return ONLY the plain corrected text string. No markdown, no quotes, no preamble.
+
+Raw input text: "${text}"`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: [{ text: prompt }]
+      });
+
+      const smoothedText = (response.text || "").trim().replace(/^["']|["']$/g, "") || text;
+      return res.json({ smoothedText });
+    } catch (err: any) {
+      console.warn("Smooth text API fallback:", err?.message);
+      return res.json({ smoothedText: text });
     }
   });
 

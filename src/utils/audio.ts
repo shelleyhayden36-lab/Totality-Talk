@@ -58,3 +58,53 @@ export function playPenaltyBuzzerSound() {
     console.error('Failed to play penalty buzzer sound:', err);
   }
 }
+
+/**
+ * Autocorrelation fundamental pitch frequency (F0) estimator for live speaker voice profiling.
+ */
+export function estimatePitch(buffer: Float32Array, sampleRate: number): number {
+  let SIZE = buffer.length;
+  let sumOfSquares = 0;
+  for (let i = 0; i < SIZE; i++) {
+    const val = buffer[i];
+    sumOfSquares += val * val;
+  }
+  const rootMeanSquare = Math.sqrt(sumOfSquares / SIZE);
+  if (rootMeanSquare < 0.012) return -1; // Ignore silence or ambient room noise
+
+  let r1 = 0;
+  let r2 = SIZE - 1;
+  const thres = 0.2;
+  for (let i = 0; i < SIZE / 2; i++) {
+    if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
+  }
+  for (let i = 1; i < SIZE / 2; i++) {
+    if (Math.abs(buffer[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+  }
+
+  const buf = buffer.slice(r1, r2);
+  SIZE = buf.length;
+
+  const c = new Float32Array(SIZE);
+  for (let i = 0; i < SIZE; i++) {
+    for (let j = 0; j < SIZE - i; j++) {
+      c[i] = c[i] + buf[j] * buf[j + i];
+    }
+  }
+
+  let d = 0;
+  while (c[d] > c[d + 1]) d++;
+  let maxval = -1, maxpos = -1;
+  for (let i = d; i < SIZE; i++) {
+    if (c[i] > maxval) {
+      maxval = c[i];
+      maxpos = i;
+    }
+  }
+  const T0 = maxpos;
+  if (T0 <= 0) return -1;
+
+  const pitch = sampleRate / T0;
+  if (pitch < 65 || pitch > 450) return -1;
+  return pitch;
+}

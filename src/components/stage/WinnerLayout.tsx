@@ -14,12 +14,12 @@ export default function WinnerLayout({ state, formatTime }: LayoutProps) {
   const conName = state.settings.conTeamName || 'Opposition';
 
   const isAffirmative = winner === 'PROPOSER';
-  const mainColorClass = winner === 'PROPOSER' ? 'text-emerald-400' : winner === 'CONTRARY' ? 'text-rose-400' : 'text-emerald-400';
-  const pulseColorClass = winner === 'PROPOSER' ? 'border-emerald-500/30 bg-emerald-500/2' : winner === 'CONTRARY' ? 'border-rose-500/30 bg-rose-500/2' : 'border-emerald-500/30 bg-emerald-500/2';
-  const ringDashedClass = winner === 'PROPOSER' ? 'border-emerald-500/10' : winner === 'CONTRARY' ? 'border-rose-500/10' : 'border-emerald-500/10';
-  const border30Class = winner === 'PROPOSER' ? 'border-emerald-500/30' : winner === 'CONTRARY' ? 'border-rose-500/30' : 'border-emerald-500/30';
-  const border60Class = winner === 'PROPOSER' ? 'border-emerald-500/60' : winner === 'CONTRARY' ? 'border-rose-500/60' : 'border-emerald-500/60';
-  const border10Class = winner === 'PROPOSER' ? 'border-emerald-500/10' : winner === 'CONTRARY' ? 'border-rose-500/10' : 'border-emerald-500/10';
+  const mainColorClass = winner === 'PROPOSER' ? 'text-emerald-400' : winner === 'CONTRARY' ? 'text-orange-400' : 'text-emerald-400';
+  const pulseColorClass = winner === 'PROPOSER' ? 'border-emerald-500/30 bg-emerald-500/2' : winner === 'CONTRARY' ? 'border-orange-500/30 bg-orange-500/2' : 'border-emerald-500/30 bg-emerald-500/2';
+  const ringDashedClass = winner === 'PROPOSER' ? 'border-emerald-500/10' : winner === 'CONTRARY' ? 'border-orange-500/10' : 'border-emerald-500/10';
+  const border30Class = winner === 'PROPOSER' ? 'border-emerald-500/30' : winner === 'CONTRARY' ? 'border-orange-500/30' : 'border-emerald-500/30';
+  const border60Class = winner === 'PROPOSER' ? 'border-emerald-500/60' : winner === 'CONTRARY' ? 'border-orange-500/60' : 'border-emerald-500/60';
+  const border10Class = winner === 'PROPOSER' ? 'border-emerald-500/10' : winner === 'CONTRARY' ? 'border-orange-500/10' : 'border-emerald-500/10';
 
   // Ripples for soundwave pulsing animation
   const rippleDelays = [0, 1, 2];
@@ -189,7 +189,7 @@ export default function WinnerLayout({ state, formatTime }: LayoutProps) {
                   <motion.span 
                     animate={{ scale: [1, 1.25, 1], rotate: [0, 15, 0] }} 
                     transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                    className="text-yellow-500 filter drop-shadow-[0_0_8px_rgba(234,179,8,0.4)]"
+                    className="text-white filter drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]"
                   >
                     👑
                   </motion.span>
@@ -201,7 +201,7 @@ export default function WinnerLayout({ state, formatTime }: LayoutProps) {
                   <motion.span 
                     animate={{ scale: [1, 1.25, 1], rotate: [0, -15, 0] }} 
                     transition={{ repeat: Infinity, duration: 2, ease: "easeInOut", delay: 0.3 }}
-                    className="text-yellow-500 filter drop-shadow-[0_0_8px_rgba(234,179,8,0.4)]"
+                    className="text-white filter drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]"
                   >
                     👑
                   </motion.span>
@@ -237,18 +237,18 @@ export default function WinnerLayout({ state, formatTime }: LayoutProps) {
                     {/* Con Team Card */}
                     <div className={`relative flex flex-col items-center py-2 px-1 bg-[#101114]/85 rounded-xl border transition-all duration-500 ${
                       winner === 'CONTRARY' 
-                        ? 'border-rose-500/80 shadow-[0_0_20px_rgba(239,68,68,0.35)] scale-105' 
+                        ? 'border-orange-500/80 shadow-[0_0_20px_rgba(249,115,22,0.35)] scale-105' 
                         : 'border-gray-900/60 opacity-50'
                     }`}>
                       {winner === 'CONTRARY' && (
-                        <span className="absolute -top-2 bg-rose-500 text-[7px] font-black uppercase text-white px-1.5 py-0.5 rounded-full tracking-wider border border-rose-400">
+                        <span className="absolute -top-2 bg-orange-500 text-[7px] font-black uppercase text-white px-1.5 py-0.5 rounded-full tracking-wider border border-orange-400">
                           Winner
                         </span>
                       )}
                       <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider truncate max-w-[90px] mt-1">
                         {conName}
                       </span>
-                      <span className={`text-xl font-mono font-black ${winner === 'CONTRARY' ? 'text-rose-400' : 'text-gray-500'}`}>
+                      <span className={`text-xl font-mono font-black ${winner === 'CONTRARY' ? 'text-orange-400' : 'text-gray-500'}`}>
                         {state.scoringCalculations.con.finalScore}
                       </span>
                     </div>

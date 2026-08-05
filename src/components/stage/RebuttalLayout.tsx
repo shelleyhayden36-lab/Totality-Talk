@@ -45,7 +45,7 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
 
   const currentTurnStartIndex = state.transcriptionSession?.speakerTurnStartIndices?.[activeSpeakerId || ''] ?? state.transcriptionSession?.activeTurnStartIndex ?? 0;
   const allTranscripts = state.transcriptionSession?.transcripts || [];
-  const activeSpeakerTranscripts = allTranscripts.slice(currentTurnStartIndex);
+  const activeSpeakerTranscripts = currentTurnStartIndex < allTranscripts.length ? allTranscripts.slice(currentTurnStartIndex) : allTranscripts;
   const interimTranscript = state.transcriptionSession?.interimTranscript || '';
 
   // Auto-scroll teleprompter
@@ -255,14 +255,14 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
     isCyanTheme = isAffRebuttal;
   }
 
-  const primaryTextClass = isCyanTheme ? 'text-cyan-400' : 'text-rose-400';
-  const primaryBorderClass = isCyanTheme ? 'border-cyan-500/50' : 'border-rose-500/50';
+  const primaryTextClass = isCyanTheme ? 'text-cyan-400' : 'text-orange-400';
+  const primaryBorderClass = isCyanTheme ? 'border-cyan-500/50' : 'border-orange-500/50';
   const primaryGlowClass = isCyanTheme 
     ? 'shadow-[0_0_35px_rgba(0,242,255,0.3)]' 
-    : 'shadow-[0_0_35px_rgba(255,42,95,0.3)]';
+    : 'shadow-[0_0_35px_rgba(249,115,22,0.3)]';
   const primaryBeamGradient = isCyanTheme 
     ? 'from-cyan-400/30 via-cyan-400/10 to-transparent' 
-    : 'from-rose-400/30 via-rose-400/10 to-transparent';
+    : 'from-orange-400/30 via-orange-400/10 to-transparent';
 
   const activeEvidence = connectedEvidences[0];
   const activeCounterClaim = connectedCounterClaims[connectedCounterClaims.length - 1];
@@ -302,7 +302,7 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
         <div className="flex items-center justify-between flex-wrap gap-2">
           {/* TOTALITY TALK BRANDING BADGE */}
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center p-0.5 border border-cyan-400/60 shadow-[0_0_12px_rgba(0,242,255,0.4)]">
+            <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-cyan-500 to-cyan-600 flex items-center justify-center p-0.5 border border-cyan-400/60 shadow-[0_0_12px_rgba(0,242,255,0.4)]">
               <div className="w-full h-full rounded-full bg-[#07090e] flex items-center justify-center">
                 <span className="text-[11px] font-black text-cyan-400 font-mono">T</span>
               </div>
@@ -325,11 +325,11 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
             <div
               className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border flex items-center gap-1.5 ${
                 isOppRebuttal
-                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/60 shadow-[0_0_12px_rgba(255,42,95,0.3)]'
+                  ? 'bg-orange-500/20 text-orange-300 border-orange-500/60 shadow-[0_0_12px_rgba(249,115,22,0.3)]'
                   : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-[0_0_12px_rgba(0,242,255,0.3)]'
               }`}
             >
-              <Zap className={`w-3.5 h-3.5 ${isOppRebuttal ? 'text-rose-400' : 'text-cyan-400'}`} />
+              <Zap className={`w-3.5 h-3.5 ${isOppRebuttal ? 'text-orange-400' : 'text-cyan-400'}`} />
               <span>{isOppRebuttal ? 'OPPOSITION REBUTTAL' : 'AFFIRMATIVE REBUTTAL'}</span>
             </div>
 
@@ -342,9 +342,9 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
                 <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase border flex items-center gap-1.5 ${
                   activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER'
                     ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50'
-                    : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
+                    : 'bg-orange-500/20 text-orange-300 border-orange-400/50'
                 }`}>
-                  <span className={`w-2 h-2 rounded-full ${activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER' ? 'bg-cyan-300' : 'bg-rose-300'}`} />
+                  <span className={`w-2 h-2 rounded-full ${activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER' ? 'bg-cyan-300' : 'bg-orange-300'}`} />
                   <span>@{activeSpeakerObj.name}</span>
                   <span className="text-[8px] opacity-75">({activeSpeakerObj.role === 'PROPOSER' || (activeSpeakerObj as any).team === 'PROPOSER' ? 'AFF' : 'OPP'})</span>
                 </div>
@@ -389,18 +389,18 @@ export default function RebuttalLayout({ state, formatTime, onStateUpdate }: Lay
                   {/* Teleprompter Header Bar */}
                   <div className="z-10 pb-2.5 border-b border-gray-800 flex items-center justify-between text-xs font-mono shrink-0">
                     <div className="flex items-center gap-2 min-w-0">
-                      <Mic className={`w-4 h-4 shrink-0 ${isAffRebuttal ? 'text-cyan-400' : 'text-rose-400'} animate-pulse`} />
+                      <Mic className={`w-4 h-4 shrink-0 ${isAffRebuttal ? 'text-cyan-400' : 'text-orange-400'} animate-pulse`} />
                       <span className="text-gray-400 font-bold uppercase tracking-wider text-[10px] shrink-0">
                         TELEPROMPTER:
                       </span>
-                      <span className={`text-xs font-black uppercase tracking-wide truncate ${isAffRebuttal ? 'text-cyan-300' : 'text-rose-300'}`}>
+                      <span className={`text-xs font-black uppercase tracking-wide truncate ${isAffRebuttal ? 'text-cyan-300' : 'text-orange-300'}`}>
                         {activeSpeakerObj ? activeSpeakerObj.name : (isAffRebuttal ? 'Affirmative Rebutter' : 'Opposition Rebutter')}
                       </span>
                     </div>
                     <span className={`text-[9px] font-extrabold px-2.5 py-0.5 rounded-full border uppercase font-mono shrink-0 ${
                       isAffRebuttal 
                         ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50' 
-                        : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
+                        : 'bg-orange-500/20 text-orange-300 border-orange-400/50'
                     }`}>
                       ⚔️ LIVE REBUTTAL
                     </span>

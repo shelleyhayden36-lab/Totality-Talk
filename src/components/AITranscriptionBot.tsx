@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Mic, Square, Play, Pause, Volume2, VolumeX, Sparkles, Plus, Check,
+  Mic, Square, Play, Pause, Volume2, VolumeX, Sparkles, Plus, Check, Star,
   Brain, UserPlus, Highlighter, FileText, Search, Gavel, Clock, Link2,
   Trash2, ChevronDown, Wand2, Image, Layers, RefreshCw, AlertCircle, ShieldAlert,
   Radio, Upload, FileAudio, Loader2, Zap, Tv, Send, UserCheck, MessageSquare
@@ -9,6 +9,8 @@ import {
   Participant, FormalClaim, AudioRecording, TranscriptItem,
   ExtractedClaim, TranscriptHighlight, AudioTranscriptionSession
 } from '../types';
+import { limitUnsavedTranscripts, cleanAndFormatTranscriptText, ACCENT_LANGUAGE_OPTIONS } from '../lib/transcriptUtils';
+import { estimatePitch } from '../utils/audio';
 
 interface AITranscriptionBotProps {
   state: any;
@@ -96,18 +98,126 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
   const [selectedPhaseFilter, setSelectedPhaseFilter] = useState<string>('ALL');
 
   // Host Voice Profile Training & Calibration State
-  const [hostVoiceProfileCalibrated, setHostVoiceProfileCalibrated] = useState<boolean>(true);
+  const [showVoiceTrainingModal, setShowVoiceTrainingModal] = useState<boolean>(false);
   const [isCalibratingHostVoice, setIsCalibratingHostVoice] = useState<boolean>(false);
+  const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState<number>(8);
+  const [calibrationLivePitch, setCalibrationLivePitch] = useState<number>(0);
+  const [calibrationAudioLevel, setCalibrationAudioLevel] = useState<number>(0);
+  const [calibrationSamplesCount, setCalibrationSamplesCount] = useState<number>(0);
+  const [calibrationResult, setCalibrationResult] = useState<{ mean: number; min: number; max: number } | null>(null);
 
-  const handleCalibrateHostVoice = () => {
-    setIsCalibratingHostVoice(true);
-    updateStateOnServer({ currentSpeakerId: 'host' });
-    setTimeout(() => {
-      setHostVoiceProfileCalibrated(true);
+  const calibrationMediaStreamRef = useRef<MediaStream | null>(null);
+  const calibrationAudioCtxRef = useRef<AudioContext | null>(null);
+
+  const CALIBRATION_STATEMENT = "Welcome to Totality Talk. I am your host for today's debate session, guiding the opening statements, cross-examination, and live floor discussion.";
+
+  const startLiveVoiceCalibration = async () => {
+    try {
+      setIsCalibratingHostVoice(true);
+      setCalibrationSecondsLeft(8);
+      setCalibrationLivePitch(0);
+      setCalibrationAudioLevel(0);
+      setCalibrationSamplesCount(0);
+      setCalibrationResult(null);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      calibrationMediaStreamRef.current = stream;
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      calibrationAudioCtxRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      const bufferLength = analyser.fftSize;
+      const dataArray = new Float32Array(bufferLength);
+
+      const collectedPitches: number[] = [];
+      let secondsRemaining = 8;
+
+      const pitchSamplingInterval = setInterval(() => {
+        analyser.getFloatTimeDomainData(dataArray);
+
+        // Calculate volume level RMS
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sumSquares += dataArray[i] * dataArray[i];
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        setCalibrationAudioLevel(Math.min(100, Math.round(rms * 400)));
+
+        // Estimate pitch F0
+        const currentPitch = estimatePitch(dataArray, audioCtx.sampleRate);
+        if (currentPitch > 65 && currentPitch < 400) {
+          collectedPitches.push(currentPitch);
+          setCalibrationLivePitch(Math.round(currentPitch));
+          setCalibrationSamplesCount(collectedPitches.length);
+        }
+      }, 60);
+
+      const countdownInterval = setInterval(() => {
+        secondsRemaining -= 1;
+        setCalibrationSecondsLeft(secondsRemaining);
+
+        if (secondsRemaining <= 0) {
+          clearInterval(pitchSamplingInterval);
+          clearInterval(countdownInterval);
+
+          // Stop audio tracks
+          if (calibrationMediaStreamRef.current) {
+            calibrationMediaStreamRef.current.getTracks().forEach(track => track.stop());
+          }
+          if (calibrationAudioCtxRef.current) {
+            calibrationAudioCtxRef.current.close().catch(() => {});
+          }
+
+          if (collectedPitches.length > 5) {
+            const sum = collectedPitches.reduce((a, b) => a + b, 0);
+            const mean = Math.round(sum / collectedPitches.length);
+            const sorted = [...collectedPitches].sort((a, b) => a - b);
+            const min = Math.round(sorted[Math.floor(sorted.length * 0.05)] || sorted[0]);
+            const max = Math.round(sorted[Math.floor(sorted.length * 0.95)] || sorted[sorted.length - 1]);
+
+            const profile = {
+              pitchMean: mean,
+              pitchMin: min,
+              pitchMax: max,
+              calibratedAt: Date.now(),
+              calibratedPhrase: CALIBRATION_STATEMENT
+            };
+
+            setCalibrationResult({ mean, min, max });
+            setIsCalibratingHostVoice(false);
+
+            // Update session state on server
+            const currentSession = sessionRef.current || session || { id: 'default', transcripts: [] };
+            updateStateOnServer({
+              currentSpeakerId: 'host',
+              transcriptionSession: {
+                ...currentSession,
+                hostVoiceProfile: profile
+              }
+            });
+
+            setAiSuccessMsg(`Host Voice Profile Locked! Pitch mapped to ${mean} Hz (${min} Hz - ${max} Hz).`);
+            setTimeout(() => setAiSuccessMsg(null), 5000);
+          } else {
+            setIsCalibratingHostVoice(false);
+            setAiSuccessMsg('No clear speech pitch detected during calibration. Please speak out loud and try again.');
+            setTimeout(() => setAiSuccessMsg(null), 4000);
+          }
+        }
+      }, 1000);
+
+    } catch (err: any) {
+      console.error('Voice calibration error:', err);
       setIsCalibratingHostVoice(false);
-      setAiSuccessMsg('Host Voice Profile calibrated! System will automatically recognize and tag your voice as Host.');
+      setAiSuccessMsg('Microphone access required for voice training calibration.');
       setTimeout(() => setAiSuccessMsg(null), 4000);
-    }, 2000);
+    }
   };
 
   const getPhaseBadgeInfo = (phaseId?: string) => {
@@ -234,7 +344,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     return base64Audio;
   };
 
-  // Speech Recognition initialization
+  // Speech Recognition initialization & dynamic language configuration
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -242,7 +352,10 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        
+        const currentLang = sessionRef.current?.transcriptionLanguage || session?.transcriptionLanguage || 'en-US';
+        recognition.lang = currentLang === 'auto' ? (navigator.language || 'en-US') : currentLang;
+        try { recognition.maxAlternatives = 3; } catch (e) {}
 
         recognition.onresult = (event: any) => {
           let interim = '';
@@ -256,8 +369,9 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             }
           }
 
-          const formattedInterim = formatNonVerbalSounds(interim.trim());
-          const formattedFinal = formatNonVerbalSounds(finalTranscript.trim());
+          const curLang = sessionRef.current?.transcriptionLanguage || 'en-US';
+          const formattedInterim = cleanAndFormatTranscriptText(formatNonVerbalSounds(interim.trim()), curLang);
+          const formattedFinal = cleanAndFormatTranscriptText(formatNonVerbalSounds(finalTranscript.trim()), curLang);
 
           if (formattedInterim) {
             setInterimTranscript(formattedInterim);
@@ -275,22 +389,40 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         // Continuous auto-restart if speech recognition pauses mid-session
         recognition.onend = () => {
           if (isRecordingRef.current) {
-            try {
-              recognition.start();
-            } catch (e) {
-              // Ignore if already starting or active
-            }
+            setTimeout(() => {
+              if (isRecordingRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start();
+                } catch (e) {
+                  // Ignore if already starting or active
+                }
+              }
+            }, 100);
           }
         };
 
         recognition.onerror = (e: any) => {
-          console.warn('Speech recognition notice:', e.error);
+          if (e?.error === 'aborted' || e?.error === 'no-speech') {
+            return;
+          }
+          console.warn('Speech recognition notice:', e?.error || e);
         };
 
         recognitionRef.current = recognition;
       }
     }
   }, []);
+
+  // Update speech recognition model language dynamically when target accent/language is changed
+  useEffect(() => {
+    if (recognitionRef.current) {
+      const currentLang = session?.transcriptionLanguage || 'en-US';
+      const targetLang = currentLang === 'auto' ? (navigator.language || 'en-US') : currentLang;
+      try {
+        recognitionRef.current.lang = targetLang;
+      } catch (e) {}
+    }
+  }, [session?.transcriptionLanguage]);
 
   // Helper to format seconds as MM:SS
   const formatTime = (secs: number) => {
@@ -301,6 +433,11 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
 
   // Add a new transcript segment
   const addTranscriptSegment = (text: string) => {
+    const currentSession = sessionRef.current || session;
+    const currentLang = currentSession.transcriptionLanguage || 'en-US';
+    const cleanedText = cleanAndFormatTranscriptText(text, currentLang);
+    if (!cleanedText) return;
+
     const currentSecs = recordingTimeRef.current;
     const formatted = formatTime(currentSecs);
 
@@ -328,7 +465,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       timestampSeconds: currentSecs,
       formattedTime: formatted,
       speaker: detectedSpeaker,
-      text,
+      text: cleanedText,
       phaseId: activePhaseId,
       phaseName: state?.currentPhase || 'Opening Statements',
       phase: activePhaseId,
@@ -337,16 +474,50 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
 
     const currentTranscripts = transcriptsRef.current || [];
     const updatedTranscripts = [...currentTranscripts, newItem];
-    transcriptsRef.current = updatedTranscripts;
 
-    const currentSession = sessionRef.current || session;
+    const isRec = !!currentSession.isRecording || isRecordingRef.current;
+    // When recording button is active, hold all transcriptions.
+    // When NOT recording, preserve all saved/starred/highlighted captions and cap unsaved live captions to last 15 items.
+    const finalTranscripts = limitUnsavedTranscripts(updatedTranscripts, isRec, 15);
+
+    transcriptsRef.current = finalTranscripts;
+
     const updatedSession = {
       ...currentSession,
-      transcripts: updatedTranscripts,
+      transcripts: finalTranscripts,
       interimTranscript: '',
     };
 
     updateStateOnServer({ transcriptionSession: updatedSession });
+
+    // Optional AI Speech & Accent Corrector (Gemini 3.6 Flash)
+    if (currentSession.aiEnhanceEnabled || currentSession.autoTranslateEnabled) {
+      const targetId = newItem.id;
+      fetch('/api/transcription/smooth-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: cleanedText,
+          accent: currentLang,
+          language: currentLang
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.smoothedText && data.smoothedText !== cleanedText) {
+          const latestSession = sessionRef.current || session;
+          const updated = (latestSession.transcripts || []).map(item => {
+            if (item.id === targetId) {
+              return { ...item, text: data.smoothedText };
+            }
+            return item;
+          });
+          transcriptsRef.current = updated;
+          updateStateOnServer({ transcriptionSession: { ...latestSession, transcripts: updated } });
+        }
+      })
+      .catch(() => {});
+    }
   };
 
   // Start Audio Recording
@@ -733,7 +904,6 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
 
       // Convert returned transcripts to TranscriptItem
       const activePhaseId = (state?.currentPhase || 'OPENING').toUpperCase();
-      const isClaimPhaseActive = activePhaseId.includes('OPEN') || activePhaseId.includes('REBUT');
 
       const newTranscripts: TranscriptItem[] = (data.transcripts || []).map((t: any, idx: number) => ({
         id: `tr_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
@@ -747,8 +917,8 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         round: state?.currentRound || 'Round 1'
       }));
 
-      // Convert returned claims to ExtractedClaim (only if in Opening or Rebuttal phase)
-      const rawClaims = isClaimPhaseActive ? (data.claims || []) : [];
+      // Convert returned claims to ExtractedClaim
+      const rawClaims = data.claims || [];
       const newClaims: ExtractedClaim[] = rawClaims.map((c: any, idx: number) => ({
         id: `cl_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 5)}`,
         text: c.text,
@@ -781,11 +951,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       };
 
       await updateStateOnServer({ transcriptionSession: updatedSession });
-      if (isClaimPhaseActive) {
-        setAiSuccessMsg(`Successfully transcribed "${rec.title}"! Generated transcript & extracted ${newClaims.length} debate claims.`);
-      } else {
-        setAiSuccessMsg(`Successfully transcribed "${rec.title}"! (Claim extraction skipped: claims are only extracted during Opening Statements and Rebuttal phases.)`);
-      }
+      setAiSuccessMsg(`Successfully transcribed "${rec.title}"! Generated transcript & extracted ${newClaims.length} debate claims.`);
       setTimeout(() => setAiSuccessMsg(null), 5000);
       setActiveTab('claims');
     } catch (err: any) {
@@ -864,6 +1030,56 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
+  // Star / Favorite / Save individual transcript segment permanently
+  const handleToggleStarTranscript = async (transcriptId: string) => {
+    const currentTranscripts = session.transcripts || [];
+    const targetItem = currentTranscripts.find((t) => t.id === transcriptId);
+    if (!targetItem) return;
+
+    const isCurrentlySaved = !!(targetItem.isStarred || targetItem.isHighlighted || targetItem.isSaved);
+    const newSavedStatus = !isCurrentlySaved;
+
+    const updatedTranscripts = currentTranscripts.map((t) => {
+      if (t.id === transcriptId) {
+        return {
+          ...t,
+          isStarred: newSavedStatus,
+          isHighlighted: newSavedStatus,
+          isSaved: newSavedStatus,
+        };
+      }
+      return t;
+    });
+
+    let updatedHighlights = [...highlights];
+    if (newSavedStatus) {
+      if (!updatedHighlights.some((h) => h.transcriptId === transcriptId || h.selectedText === targetItem.text)) {
+        updatedHighlights.unshift({
+          id: `hl_${Date.now()}`,
+          transcriptId: targetItem.id,
+          selectedText: targetItem.text,
+          note: `Saved caption (${targetItem.speaker || 'Speaker'})`,
+          color: '#f59e0b',
+          targetAction: 'existing_claim',
+          createdAt: new Date().toLocaleTimeString(),
+        });
+      }
+    } else {
+      updatedHighlights = updatedHighlights.filter((h) => h.transcriptId !== transcriptId && h.selectedText !== targetItem.text);
+    }
+
+    const updatedSession = {
+      ...session,
+      transcripts: updatedTranscripts,
+      highlights: updatedHighlights,
+    };
+
+    transcriptsRef.current = updatedTranscripts;
+    await updateStateOnServer({ transcriptionSession: updatedSession });
+    setAiSuccessMsg(newSavedStatus ? 'Saved caption permanently!' : 'Removed star from caption.');
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
   // Clear all transcript segments
   const handleClearAllTranscripts = async () => {
     const updatedSession = { ...session, transcripts: [] };
@@ -901,18 +1117,6 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       return;
     }
 
-    // Restrict claim extraction to Opening Statements & Rebuttal phases only
-    const claimPhaseTranscripts = baseTranscripts.filter((t) => {
-      const p = (t.phaseId || (t as any).phaseName || (t as any).phase || '').toUpperCase();
-      if (!p) return true;
-      return p.includes('OPEN') || p.includes('REBUT');
-    });
-
-    if (claimPhaseTranscripts.length === 0) {
-      setAiError('Claims are only extracted during Opening Statements and Rebuttal phases. Cross-Examination, Chat Questions, Highlights, Lobby, and Closing phases are excluded from claim extraction.');
-      return;
-    }
-
     setIsExtracting(true);
     setAiError(null);
 
@@ -921,7 +1125,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcripts: claimPhaseTranscripts,
+          transcripts: baseTranscripts,
           currentPhase: state?.currentPhase || 'OPENING',
           seatedPanelists,
         }),
@@ -942,14 +1146,14 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         }));
 
         if (newClaims.length === 0) {
-          setAiSuccessMsg(data.note || 'No explicit claims found in Opening/Rebuttal transcript segment.');
+          setAiSuccessMsg(data.note || 'No explicit claims found in transcript segment.');
         } else {
           const updatedSession = {
             ...session,
             extractedClaims: [...newClaims, ...extractedClaims],
           };
           await updateStateOnServer({ transcriptionSession: updatedSession });
-          const phaseNotice = selectedPhaseFilter !== 'ALL' ? `from ${selectedPhaseFilter} phase` : 'from Opening/Rebuttal phases';
+          const phaseNotice = selectedPhaseFilter !== 'ALL' ? `from ${selectedPhaseFilter} phase` : '';
           setAiSuccessMsg(`Successfully extracted ${newClaims.length} debate claims ${phaseNotice} using Gemini AI.`);
         }
         setActiveTab('claims');
@@ -1114,8 +1318,17 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
       createdAt: new Date().toLocaleTimeString(),
     };
 
+    const sel = selectedText.trim();
+    const currentTranscripts = session.transcripts || [];
+    const updatedTranscripts = currentTranscripts.map((t) => {
+      if (t.text.includes(sel) || sel.includes(t.text)) {
+        return { ...t, isHighlighted: true, isStarred: true, isSaved: true };
+      }
+      return t;
+    });
+
     const updatedHighlights = [newHighlight, ...highlights];
-    let updatedSession = { ...session, highlights: updatedHighlights };
+    let updatedSession = { ...session, transcripts: updatedTranscripts, highlights: updatedHighlights };
 
     if (action === 'claim') {
       // Create a claim directly from highlighted text
@@ -1320,6 +1533,89 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   </span>
                 </div>
               )}
+            </div>
+
+            {/* ACCENT & SPEECH MODEL CONTROLS */}
+            <div className="bg-[#16171d] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Accent, Dialect & AI Speech Engine</span>
+                </span>
+                <span className="text-[9px] font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                  International Speech Support
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Accent & Dialect Selector */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1">
+                    <span>Target Accent / Dialect:</span>
+                  </label>
+                  <select
+                    value={session?.transcriptionLanguage || 'en-US'}
+                    onChange={(e) => {
+                      const newLang = e.target.value;
+                      const updatedSession = { ...session, transcriptionLanguage: newLang };
+                      updateStateOnServer({ transcriptionSession: updatedSession });
+                      setAiSuccessMsg(`Updated speech recognition model to: ${ACCENT_LANGUAGE_OPTIONS.find(o => o.code === newLang)?.label || newLang}`);
+                      setTimeout(() => setAiSuccessMsg(null), 3000);
+                    }}
+                    className="bg-[#0d0e10] border border-[#2d2f39] text-xs font-semibold text-white px-3 py-2 rounded-lg focus:outline-none focus:border-[#f97316]"
+                  >
+                    {ACCENT_LANGUAGE_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code}>
+                        {opt.flag} {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* AI Enhancer & Translator Toggles */}
+                <div className="flex flex-col justify-center gap-2 bg-[#0d0e10] p-2.5 rounded-lg border border-[#2d2f39]">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={!!session?.aiEnhanceEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const updatedSession = { ...session, aiEnhanceEnabled: enabled };
+                        updateStateOnServer({ transcriptionSession: updatedSession });
+                      }}
+                      className="rounded border-gray-600 text-[#f97316] focus:ring-[#f97316]"
+                    />
+                    <span className="flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>AI Accent & Grammar Corrector</span>
+                    </span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={!!session?.autoTranslateEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const updatedSession = { ...session, autoTranslateEnabled: enabled };
+                        updateStateOnServer({ transcriptionSession: updatedSession });
+                      }}
+                      className="rounded border-gray-600 text-[#f97316] focus:ring-[#f97316]"
+                    />
+                    <span className="flex items-center gap-1">
+                      <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Auto-Translate Speech to English</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-gray-400 leading-normal flex items-start gap-1.5 bg-[#0a0b0d] p-2 rounded-lg">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Accent Precision Tip:</strong> For British accents choose 🇬🇧 <strong>English (UK)</strong>; for Australian speech choose 🇦🇺 <strong>English (Australia)</strong>. Enabling <strong>AI Accent & Grammar Corrector</strong> automatically cleans phonetic errors and adds proper punctuation using Gemini 3.6 Flash without changing the speaker's meaning.
+                </span>
+              </div>
             </div>
 
             {/* RECORDING CONTROL PANEL */}
@@ -1640,6 +1936,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   const phaseInfo = getPhaseBadgeInfo(t.phaseId || (t as any).phaseName);
                   const speakerDisplay = t.speaker || t.speakerName || 'Speaker';
                   const formattedTimeStr = t.formattedTime || t.timestamp || 'Live';
+                  const isSavedItem = !!(t.isStarred || t.isHighlighted || t.isSaved);
 
                   return (
                     <div
@@ -1647,6 +1944,8 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                       className={`p-3 rounded-xl border transition-all ${
                         isActiveLine
                           ? 'bg-[#f97316]/15 border-[#f97316]/50 shadow-md shadow-[#f97316]/10'
+                          : isSavedItem
+                          ? 'bg-amber-500/10 border-amber-500/40 shadow-sm shadow-amber-500/5'
                           : 'bg-[#16171d]/60 border-[#2d2f39]/60 hover:border-[#f97316]/30'
                       }`}
                     >
@@ -1669,13 +1968,26 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStarTranscript(t.id)}
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded transition-all flex items-center gap-1 cursor-pointer ${
+                              isSavedItem
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                                : 'text-gray-400 hover:text-amber-400 hover:bg-white/5 border border-transparent'
+                            }`}
+                            title={isSavedItem ? "Saved permanently (click to remove star)" : "Star/Favorite to save caption permanently"}
+                          >
+                            <Star className={`w-3 h-3 ${isSavedItem ? 'fill-amber-400 text-amber-400' : ''}`} />
+                            <span>{isSavedItem ? 'Saved' : 'Save'}</span>
+                          </button>
                           <button
                             onClick={() => {
                               setSelectedText(t.text);
                               setShowHighlightModal(true);
                             }}
-                            className="text-[10px] font-bold text-[#f97316] hover:underline flex items-center gap-1 cursor-pointer"
+                            className="text-[10px] font-bold text-[#f97316] hover:underline flex items-center gap-1 cursor-pointer px-1.5 py-0.5"
                           >
                             <Highlighter className="w-3 h-3" />
                             <span>Highlight</span>
@@ -1777,8 +2089,8 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
             </div>
 
             <div className="bg-[#121319] border border-[#232530] rounded-lg px-3 py-2 text-[11px] text-gray-400 flex items-center gap-2">
-              <span className="bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide">Phase Policy</span>
-              <span>Claim extraction is restricted to <strong>Opening Statements</strong> and <strong>Rebuttal</strong> phases only (Cross-Exam, Chat Q, Highlights, Lobby &amp; Closing are excluded).</span>
+              <span className="bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide">AI Extractor</span>
+              <span>Gemini AI analyzes transcript speech across all debate phases (Opening Statements, Prosecution, Cross-Exam, Rebuttal, Summation, Closing, etc.) to extract explicit claims.</span>
             </div>
 
             {extractedClaims.length === 0 ? (
@@ -1988,6 +2300,82 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
         {/* TAB 6: OPEN CAPTIONS & ACTIVE SPEAKER CONTROL */}
         {activeTab === 'captions' && (
           <div className="flex flex-col gap-4">
+            {/* ACCENT & SPEECH MODEL CONTROLS */}
+            <div className="bg-[#16171d] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Accent, Dialect & AI Speech Engine</span>
+                </span>
+                <span className="text-[9px] font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                  International Speech Support
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Accent & Dialect Selector */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1">
+                    <span>Target Accent / Dialect:</span>
+                  </label>
+                  <select
+                    value={session?.transcriptionLanguage || 'en-US'}
+                    onChange={(e) => {
+                      const newLang = e.target.value;
+                      const updatedSession = { ...session, transcriptionLanguage: newLang };
+                      updateStateOnServer({ transcriptionSession: updatedSession });
+                      setAiSuccessMsg(`Updated speech recognition model to: ${ACCENT_LANGUAGE_OPTIONS.find(o => o.code === newLang)?.label || newLang}`);
+                      setTimeout(() => setAiSuccessMsg(null), 3000);
+                    }}
+                    className="bg-[#0d0e10] border border-[#2d2f39] text-xs font-semibold text-white px-3 py-2 rounded-lg focus:outline-none focus:border-[#f97316]"
+                  >
+                    {ACCENT_LANGUAGE_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code}>
+                        {opt.flag} {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* AI Enhancer & Translator Toggles */}
+                <div className="flex flex-col justify-center gap-2 bg-[#0d0e10] p-2.5 rounded-lg border border-[#2d2f39]">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={!!session?.aiEnhanceEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const updatedSession = { ...session, aiEnhanceEnabled: enabled };
+                        updateStateOnServer({ transcriptionSession: updatedSession });
+                      }}
+                      className="rounded border-gray-600 text-[#f97316] focus:ring-[#f97316]"
+                    />
+                    <span className="flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>AI Accent & Grammar Corrector</span>
+                    </span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={!!session?.autoTranslateEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const updatedSession = { ...session, autoTranslateEnabled: enabled };
+                        updateStateOnServer({ transcriptionSession: updatedSession });
+                      }}
+                      className="rounded border-gray-600 text-[#f97316] focus:ring-[#f97316]"
+                    />
+                    <span className="flex items-center gap-1">
+                      <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Auto-Translate Speech to English</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             {/* 1. ACTIVE SPEAKER CONTROL GRID */}
             <div className="bg-[#16171d] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-3">
               <div className="flex items-center justify-between">
@@ -2028,19 +2416,18 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   </button>
 
                   <div className="w-full pt-1.5 border-t border-cyan-500/20 flex items-center justify-between gap-1">
-                    <span className={`text-[9px] font-medium ${hostVoiceProfileCalibrated ? 'text-cyan-300' : 'text-gray-400'}`}>
-                      {hostVoiceProfileCalibrated ? '✓ Profile Active' : 'Uncalibrated'}
+                    <span className={`text-[9px] font-medium ${session?.hostVoiceProfile ? 'text-cyan-300 font-bold' : 'text-amber-400'}`}>
+                      {session?.hostVoiceProfile ? `✓ Profile (${session.hostVoiceProfile.pitchMean} Hz)` : '⚠️ Uncalibrated'}
                     </span>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleCalibrateHostVoice();
+                        setShowVoiceTrainingModal(true);
                       }}
-                      disabled={isCalibratingHostVoice}
-                      className="text-[9px] font-bold text-cyan-300 bg-cyan-500/20 hover:bg-cyan-500/30 px-2 py-0.5 rounded transition-all cursor-pointer border border-cyan-500/40 disabled:opacity-50"
+                      className="text-[9px] font-bold text-cyan-300 bg-cyan-500/20 hover:bg-cyan-500/30 px-2 py-0.5 rounded transition-all cursor-pointer border border-cyan-500/40"
                     >
-                      {isCalibratingHostVoice ? 'Listening...' : 'Train Voice'}
+                      {session?.hostVoiceProfile ? 'Re-Train Voice' : 'Train Voice'}
                     </button>
                   </div>
                 </div>
@@ -2214,7 +2601,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                           transcriptionSession: {
                             ...currentSession,
                             interimTranscript: newText,
-                            isRecording: true
+                            isRecording: currentSession.isRecording ?? false
                           }
                         });
                       }}
@@ -2241,7 +2628,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                           transcriptionSession: {
                             ...currentSession,
                             interimTranscript: manualCaptionText.trim(),
-                            isRecording: true
+                            isRecording: currentSession.isRecording ?? false
                           }
                         });
                         setManualCaptionText('');
@@ -2259,7 +2646,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                         transcriptionSession: {
                           ...currentSession,
                           interimTranscript: manualCaptionText.trim(),
-                          isRecording: true
+                          isRecording: currentSession.isRecording ?? false
                         }
                       });
                       setManualCaptionText('');
@@ -2277,7 +2664,7 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                         transcriptionSession: {
                           ...currentSession,
                           interimTranscript: '',
-                          isRecording: true
+                          isRecording: currentSession.isRecording ?? false
                         }
                       });
                     }}
@@ -2359,6 +2746,108 @@ export const AITranscriptionBot: React.FC<AITranscriptionBotProps> = ({
                   <span>Save Highlight Only</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HOST VOICE TRAINING & CALIBRATION MODAL */}
+      {showVoiceTrainingModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#121318] border border-cyan-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-5 text-white animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-[#2d2f39] pb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-cyan-500/20 border border-cyan-500/30 text-cyan-400">
+                  <Mic className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-cyan-300">
+                    Host Voice Profile Calibration
+                  </h3>
+                  <p className="text-[10px] text-gray-400">
+                    Lock your vocal pitch profile so non-host voices never show as Host.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (calibrationMediaStreamRef.current) {
+                    calibrationMediaStreamRef.current.getTracks().forEach(t => t.stop());
+                  }
+                  setShowVoiceTrainingModal(false);
+                }}
+                className="text-gray-400 hover:text-white text-xs font-bold px-2 py-1 rounded bg-[#1e2029] border border-[#2d2f39] cursor-pointer"
+              >
+                Close ✕
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="bg-[#0a0b0e] border border-[#2d2f39] p-3.5 rounded-xl flex flex-col gap-2">
+                <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Read Calibration Statement Out Loud (8 Seconds):</span>
+                </span>
+                <p className="text-xs font-medium text-gray-200 bg-[#14161f] p-3 rounded-lg border border-cyan-500/20 italic leading-relaxed">
+                  "{CALIBRATION_STATEMENT}"
+                </p>
+              </div>
+
+              {isCalibratingHostVoice ? (
+                <div className="bg-[#0a0b0e] border border-cyan-500/40 p-4 rounded-xl flex flex-col gap-3 items-center justify-center text-center">
+                  <div className="flex items-center gap-2 text-cyan-300 font-mono text-sm font-black">
+                    <Radio className="w-4 h-4 text-rose-500 animate-ping" />
+                    <span>RECORDING VOICE PRINT: {calibrationSecondsLeft}s REMAINING</span>
+                  </div>
+
+                  {/* Volume meter bar */}
+                  <div className="w-full bg-[#1b1d28] rounded-full h-3 overflow-hidden border border-[#2d2f39] p-0.5">
+                    <div
+                      className="bg-gradient-to-r from-cyan-500 to-amber-400 h-full rounded-full transition-all duration-75"
+                      style={{ width: `${Math.max(5, calibrationAudioLevel)}%` }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between w-full text-[11px] font-mono text-gray-300 pt-1">
+                    <span>Live Vocal Pitch: <strong className="text-amber-400">{calibrationLivePitch > 0 ? `${calibrationLivePitch} Hz` : 'Detecting...'}</strong></span>
+                    <span>Pitch Samples: <strong className="text-cyan-300">{calibrationSamplesCount}</strong></span>
+                  </div>
+                </div>
+              ) : calibrationResult ? (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-emerald-300 text-xs font-bold">
+                    <Check className="w-4 h-4" />
+                    <span>Voice Calibration Complete & Saved!</span>
+                  </div>
+                  <p className="text-[11px] text-gray-300 leading-normal">
+                    Mean Vocal Pitch mapped to <strong className="text-white">{calibrationResult.mean} Hz</strong> (Range: {calibrationResult.min} Hz - {calibrationResult.max} Hz). The AI live stage will now lock your voice to Host and designate all non-matching voices as Guest Speakers.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-[#0a0b0e] border border-[#2d2f39] p-3 rounded-xl flex flex-col gap-2">
+                  <span className="text-[10px] text-gray-400">
+                    {session?.hostVoiceProfile ? (
+                      <>Currently calibrated at <strong className="text-cyan-300">{session.hostVoiceProfile.pitchMean} Hz</strong>. Click below to recalibrate.</>
+                    ) : (
+                      <>Uncalibrated. Click start, then speak the statement above clearly into your microphone.</>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#2d2f39]">
+              {!isCalibratingHostVoice && (
+                <button
+                  type="button"
+                  onClick={startLiveVoiceCalibration}
+                  className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold text-xs py-2.5 rounded-xl shadow-lg shadow-orange-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Mic className="w-4 h-4" />
+                  <span>{session?.hostVoiceProfile ? 'Recalibrate Host Voice' : 'Start Voice Calibration (8s)'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

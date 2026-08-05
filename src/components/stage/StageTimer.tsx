@@ -89,16 +89,16 @@ export default function StageTimer({ state, formatTime, isAffirmative = true }: 
   let timerBorderClass = 'border-gray-700/80 shadow-[0_0_20px_rgba(0,0,0,0.6)]';
   let timerTextClass = 'text-white';
   let pulseDotClass = isRunning 
-    ? (isAffirmative ? 'bg-cyan-400' : 'bg-rose-400') 
+    ? (isAffirmative ? 'bg-cyan-400' : 'bg-orange-400') 
     : 'bg-gray-500';
 
   if (isRedWarning) {
-    timerBorderClass = 'border-red-500/90 shadow-[0_0_25px_rgba(239,68,68,0.4)] animate-pulse';
-    timerTextClass = 'text-red-400 font-extrabold';
-    pulseDotClass = 'bg-red-500';
+    timerBorderClass = 'border-orange-500/90 shadow-[0_0_25px_rgba(249,115,22,0.4)] animate-pulse';
+    timerTextClass = 'text-orange-400 font-extrabold';
+    pulseDotClass = 'bg-orange-500';
   } else if (isExpanded) {
     // Elegant amber or team warning color for expanded state (but not yet red)
-    timerBorderClass = isAffirmative ? 'border-cyan-500/80' : 'border-rose-500/80';
+    timerBorderClass = isAffirmative ? 'border-cyan-500/80' : 'border-orange-500/80';
   }
 
   return (

@@ -32,12 +32,12 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
     ? activeSpeaker.name.replace('@', '').charAt(0).toUpperCase() 
     : 'S';
 
-  const mainColorClass = isAffirmative ? 'text-cyan-400' : 'text-rose-400';
-  const borderAccentClass = isAffirmative ? 'border-cyan-500/30' : 'border-rose-500/30';
-  const bgAccentClass = isAffirmative ? 'bg-cyan-500/10' : 'bg-rose-500/10';
+  const mainColorClass = isAffirmative ? 'text-cyan-400' : 'text-orange-400';
+  const borderAccentClass = isAffirmative ? 'border-cyan-500/30' : 'border-orange-500/30';
+  const bgAccentClass = isAffirmative ? 'bg-cyan-500/10' : 'bg-orange-500/10';
   const glowShadowClass = isAffirmative 
     ? 'shadow-[0_0_35px_rgba(6,182,212,0.15)]' 
-    : 'shadow-[0_0_35px_rgba(244,63,94,0.15)]';
+    : 'shadow-[0_0_35px_rgba(249,115,22,0.15)]';
 
   // Session Transcripts & Live Recording State directly from server state
   const session = state?.transcriptionSession;
@@ -70,7 +70,7 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
   // Filter transcripts so teleprompter ONLY shows new transcript items recorded for THIS opening statement session/seat
   const transcripts = phaseTranscripts.filter((t) => {
     const rawIndex = rawTranscripts.indexOf(t);
-    return rawIndex >= startOffset;
+    return rawIndex === -1 || rawIndex >= startOffset;
   });
 
   const interimTranscript = session?.interimTranscript || '';
@@ -129,7 +129,7 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
       {/* SLEEK HEADER BAR - TOP RIGHT RESERVED EXCLUSIVELY FOR TIMER */}
       <div className="flex items-center justify-between border-b border-gray-800/60 pb-2 mb-2 shrink-0 pr-32">
         <div className="flex items-center gap-2 bg-[#0d0f16] border border-gray-800 rounded-full px-3.5 py-1.5 shadow-md">
-          <span className={`w-2.5 h-2.5 rounded-full ${isRecordingSession ? 'bg-red-500 animate-ping' : 'bg-cyan-400'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isRecordingSession ? 'bg-orange-500 animate-ping' : 'bg-cyan-400'}`} />
           <span className="text-sm font-black text-white uppercase tracking-wide">
             {speakerName}
           </span>
@@ -221,13 +221,13 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
               className={`bg-gradient-to-br from-[#0c0e14]/90 to-[#07080c]/90 border ${borderAccentClass} p-6 sm:p-8 rounded-2xl shadow-2xl relative overflow-hidden backdrop-blur-md h-full flex flex-col justify-between ${glowShadowClass}`}
             >
               {/* Ambient Background Glow */}
-              <div className={`absolute -top-16 -right-16 w-40 h-40 rounded-full blur-3xl pointer-events-none ${isAffirmative ? 'bg-cyan-500/10' : 'bg-rose-500/10'}`} />
+              <div className={`absolute -top-16 -right-16 w-40 h-40 rounded-full blur-3xl pointer-events-none ${isAffirmative ? 'bg-cyan-500/10' : 'bg-orange-500/10'}`} />
 
               {/* CENTER SPEAKER DISPLAY */}
               <div className="flex-1 flex flex-col items-center justify-center text-center my-auto py-6">
                 <div className="relative w-24 h-24 flex items-center justify-center mb-3">
                   <motion.div
-                    className={`absolute rounded-full border ${isAffirmative ? 'border-cyan-500/30 bg-cyan-500/10' : 'border-rose-500/30 bg-rose-500/10'}`}
+                    className={`absolute rounded-full border ${isAffirmative ? 'border-cyan-500/30 bg-cyan-500/10' : 'border-orange-500/30 bg-orange-500/10'}`}
                     animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0.7, 0.3] }}
                     transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
                     style={{ width: '100%', height: '100%' }}
@@ -249,7 +249,7 @@ export default function OpeningLayout({ state, formatTime, onStateUpdate }: Layo
                 </h2>
 
                 <div className="mt-3 inline-flex items-center gap-2 px-3.5 py-1 rounded-full border border-gray-800 bg-[#0d0f16]">
-                  <span className={`w-2 h-2 rounded-full ${isAffirmative ? 'bg-cyan-400' : 'bg-rose-400'}`} />
+                  <span className={`w-2 h-2 rounded-full ${isAffirmative ? 'bg-cyan-400' : 'bg-orange-400'}`} />
                   <span className={`text-[11px] font-black uppercase tracking-wider ${mainColorClass}`}>
                     {teamLabel}
                   </span>

@@ -46,6 +46,8 @@ export interface TranscriptItem {
   phase?: string;
   round?: string;
   isHighlighted?: boolean;
+  isStarred?: boolean;
+  isSaved?: boolean;
 }
 
 export interface ExtractedClaim {
@@ -86,4 +88,14 @@ export interface AudioTranscriptionSession {
   isRecording?: boolean;
   activeTurnStartIndex?: number;
   speakerTurnStartIndices?: Record<string, number>;
+  transcriptionLanguage?: string;
+  aiEnhanceEnabled?: boolean;
+  autoTranslateEnabled?: boolean;
+  hostVoiceProfile?: {
+    pitchMean: number;
+    pitchMin: number;
+    pitchMax: number;
+    calibratedAt: number;
+    calibratedPhrase?: string;
+  };
 }
